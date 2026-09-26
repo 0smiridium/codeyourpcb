@@ -119,9 +119,18 @@ fn hover_for_component(
     None
 }
 
+/// The footprints the document was built against, which hold what its index
+/// supplied as well as the built-ins; the built-ins alone before it is built.
+fn library_of<'a>(doc: &'a DocumentState, built_in: &'a FootprintLibrary) -> &'a FootprintLibrary {
+    doc.world
+        .as_ref()
+        .map_or(built_in, |world| world.footprints())
+}
+
 /// Enhanced component hover with net connections and DRC status.
 fn make_component_hover_enhanced(doc: &DocumentState, comp: &ComponentDef) -> HoverInfo {
-    let lib = FootprintLibrary::new();
+    let built_in = FootprintLibrary::new();
+    let lib = library_of(doc, &built_in);
     let mut lines = vec![format!("**{}** ({:?})", comp.refdes.value, comp.kind)];
 
     // Footprint info with size if available
@@ -231,7 +240,8 @@ fn make_footprint_hover(doc: &DocumentState, footprint_name: &str) -> HoverInfo 
         };
     }
 
-    let lib = FootprintLibrary::new();
+    let built_in = FootprintLibrary::new();
+    let lib = library_of(doc, &built_in);
 
     if let Some(fp) = lib.get(footprint_name) {
         let pad_type = if fp.pads.iter().any(|p| p.drill.is_some()) {

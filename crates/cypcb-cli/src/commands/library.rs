@@ -133,12 +133,15 @@ impl LibraryCommand {
                     return Ok(());
                 }
 
+                // The name first, spelled the way a design writes it: the
+                // index is asked for `source::name`, and a bare name printed
+                // here was one a person copied into a design and saw refused.
                 for result in &results {
                     let component = &result.component;
                     let description = component.metadata.description.as_deref().unwrap_or("");
                     println!(
                         "{}  [{}]{}{}",
-                        component.id.name,
+                        component.id,
                         component.library,
                         if description.is_empty() { "" } else { "  " },
                         description

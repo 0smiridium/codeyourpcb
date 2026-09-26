@@ -166,7 +166,7 @@ pub fn read_cypcb(path: &Path, source: &str, warnings: bool) -> Result<LoadedBoa
 
     // Semantic validation: build the board model from the AST.
     let mut world = BoardWorld::new();
-    let mut library = FootprintLibrary::new();
+    let mut library = cypcb_library::design::footprint_library_for(&ast, path);
     let sync_result = cypcb_world::sync_ast_to_world(&ast, source, &mut world, &mut library);
 
     if !sync_result.errors.is_empty() {

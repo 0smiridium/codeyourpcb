@@ -389,6 +389,13 @@ impl Diagnostic for SyncError {
 
     fn help<'a>(&'a self) -> Option<Box<dyn fmt::Display + 'a>> {
         match self {
+            SyncError::UnknownFootprint { name, .. } if name.contains("::") => {
+                Some(Box::new(
+                    "a `source::name` footprint is read from cypcb-library.db in the design's \
+                     directory or the nearest one above it: `cypcb library import <directory>` \
+                     puts it there, and `cypcb library search` prints the name to write",
+                ))
+            }
             SyncError::UnknownFootprint { .. } => {
                 Some(Box::new("add this footprint to the library or use a built-in footprint like '0402', '0603', 'DIP-8'"))
             }
