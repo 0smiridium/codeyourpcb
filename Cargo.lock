@@ -1031,6 +1031,7 @@ dependencies = [
  "cypcb-fixtures",
  "cypcb-kicad",
  "cypcb-library",
+ "cypcb-lsp",
  "cypcb-parser",
  "cypcb-render",
  "cypcb-router",

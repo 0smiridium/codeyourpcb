@@ -229,7 +229,9 @@ cargo run -p cypcb-cli -- watch examples/blink.cypcb          # check again on e
 ```
 
 `check`, `route` and `score` all take `--preset`, and an unknown
-name prints the list. They use the same rules and agree on the same board:
+name prints the list. Without it they read the board's own `fab`, for its layer
+count; the `fab` section of `docs/SYNTAX.md` says which table that is. They use
+the same rules and agree on the same board:
 `examples/blink.routed.cypcb` is 2 violations to `check --preset pcbway` and 2
 to `score --preset pcbway`.
 

@@ -225,3 +225,101 @@ fn the_manual_names_the_binary_that_exists() {
         "the binary the manual names is the one that answers: {result}"
     );
 }
+
+fn syntax_guide() -> String {
+    let path: PathBuf = [env!("CARGO_MANIFEST_DIR"), "..", "..", "docs", "SYNTAX.md"]
+        .iter()
+        .collect();
+    std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{} is missing: {e}", path.display()))
+}
+
+/// One row of the guide's table of which fab table a board is checked against.
+#[derive(Debug)]
+struct Example {
+    layers: u8,
+    fab: Option<String>,
+    table: String,
+    warns: bool,
+}
+
+/// The rows under `| Board says | Checked against |` in `docs/SYNTAX.md`.
+fn examples_in(guide: &str) -> Vec<Example> {
+    let header = "| Board says | Checked against |";
+    let start = guide
+        .find(header)
+        .unwrap_or_else(|| panic!("the guide has lost its '{header}' table"));
+    let mut examples = Vec::new();
+    for row in guide[start..].lines().skip(2) {
+        if !row.starts_with('|') {
+            break;
+        }
+        let cells: Vec<&str> = row.trim_matches('|').split('|').collect();
+        let says: Vec<&str> = cells[0].split('`').skip(1).step_by(2).collect();
+        let layers = says
+            .iter()
+            .find_map(|piece| piece.strip_prefix("layers "))
+            .and_then(|count| count.parse().ok())
+            .unwrap_or_else(|| panic!("a row with no layer count: {row}"));
+        let fab = says
+            .iter()
+            .find_map(|piece| piece.strip_prefix("fab "))
+            .map(str::to_string);
+        let table = cells[1]
+            .split('`')
+            .nth(1)
+            .unwrap_or_else(|| panic!("a row naming no table: {row}"))
+            .to_string();
+        examples.push(Example {
+            layers,
+            fab,
+            table,
+            warns: cells[1].contains("warning"),
+        });
+    }
+    examples
+}
+
+/// The manual says the server checks against the table `cypcb check` uses,
+/// and sends the reader to `docs/SYNTAX.md` for which one that is. It said
+/// "the JLCPCB 2-layer rules" for months after the server started reading the
+/// board's `fab`, and the server checked a four-layer board against the
+/// two-layer table while `cypcb check` used the four-layer one. So the guide's
+/// table is run here: every row, as a board, through the server.
+#[test]
+fn the_server_checks_against_the_table_the_guide_names() {
+    let manual = manual();
+    assert!(
+        section(&manual, "## What it answers").contains("`docs/SYNTAX.md`"),
+        "the manual has to send the reader to the one description of the choice"
+    );
+
+    let examples = examples_in(&syntax_guide());
+    assert!(
+        examples.len() >= 5,
+        "the guide's table has only {} rows: {examples:?}",
+        examples.len()
+    );
+    for example in &examples {
+        let fab_line = example
+            .fab
+            .as_ref()
+            .map_or(String::new(), |fab| format!("    fab {fab}\n"));
+        let source = format!(
+            "version 1\n\nboard t {{\n    size 20mm x 20mm\n    layers {}\n{fab_line}}}\n",
+            example.layers
+        );
+        let mut doc = cypcb_lsp::document::DocumentState::new("test://guide".into(), source, 1);
+        doc.parse();
+        doc.build_world();
+        assert_eq!(
+            doc.checked_against.map(|table| table.name()),
+            Some(example.table.as_str()),
+            "{example:?}"
+        );
+        assert_eq!(
+            doc.fab_fallback.is_some(),
+            example.warns,
+            "the guide and the server disagree about a warning: {example:?}"
+        );
+    }
+}

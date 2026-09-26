@@ -254,6 +254,7 @@ async function init(): Promise<void> {
   const statusText = document.getElementById('status-text')!;
   const errorBadge = document.getElementById('error-badge')!;
   const errorCountEl = document.getElementById('error-count')!;
+  const drcTableEl = document.getElementById('drc-table')!;
   const errorPanel = document.getElementById('error-panel')!;
   const errorList = document.getElementById('error-list')!;
   const errorPanelClose = document.getElementById('error-panel-close')!;
@@ -318,6 +319,13 @@ async function init(): Promise<void> {
    * Update error badge with violation count
    */
   function updateErrorBadge(violations: ViolationInfo[]): void {
+    // Which fab table the count is measured by, the way `cypcb check` says
+    // it after "against". A four-layer board and a board naming no fab were
+    // checked against a different table here than on the command line, and
+    // nothing on screen said which one.
+    const table = engine.drc_table();
+    drcTableEl.textContent = table ? `DRC against ${table}` : '';
+    drcTableEl.classList.toggle('hidden', !table);
     if (violations.length > 0) {
       errorCountEl.textContent = String(violations.length);
       errorBadge.classList.remove('hidden');

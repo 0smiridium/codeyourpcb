@@ -433,22 +433,22 @@ impl PcbEngine {
         // the editor cannot, because it still has to draw the board - so it
         // falls back to JLCPCB and says so here rather than grading the design
         // against a table nobody asked for and looking correct while it does.
-        if let Some(named) = self.world.fab() {
-            if cypcb_rules::presets::RulesPreset::from_name(named).is_none() {
-                let available: Vec<&str> = cypcb_rules::presets::RulesPreset::all()
-                    .iter()
-                    .map(|preset| preset.name())
-                    .collect();
-                let message = format!(
-                    "The board asks for fab '{}', which is not a preset this tool has. \
-                     Checking against jlcpcb instead. Available presets: {}",
-                    named,
-                    available.join(", ")
-                );
-                let (start, end) = fab_span(&resolved).unwrap_or((0, 0));
-                self.diagnostics
-                    .push(SourceDiagnostic::from_span(message, source, start, end));
-            }
+        if let (fallback, Some(unknown)) = cypcb_drc::table_for_editor(&self.world) {
+            let named = &unknown.name;
+            let available: Vec<&str> = cypcb_rules::presets::RulesPreset::all()
+                .iter()
+                .map(|preset| preset.name())
+                .collect();
+            let message = format!(
+                "The board asks for fab '{}', which is not a preset this tool has. \
+                 Checking against {} instead. Available presets: {}",
+                named,
+                fallback.name(),
+                available.join(", ")
+            );
+            let (start, end) = fab_span(&resolved).unwrap_or((0, 0));
+            self.diagnostics
+                .push(SourceDiagnostic::from_span(message, source, start, end));
         }
 
         // And what the board did not say, which the browser never showed at
@@ -785,6 +785,12 @@ impl PcbEngine {
         serde_json::to_string(&self.diagnostics).unwrap_or_else(|_| "[]".to_string())
     }
 
+    /// The table the board is checked against, named as `cypcb check` names
+    /// it after "against", so the status can say what the count is measured by.
+    pub fn drc_table(&self) -> String {
+        self.preset().name().to_string()
+    }
+
     /// Get the last check's DRC violations as JSON.
     ///
     /// This is the rule's own report: one entry per place the clearance rule
@@ -1001,21 +1007,19 @@ impl PcbEngine {
 impl PcbEngine {
     /// The fab table this board is checked and routed against.
     ///
-    /// `board b { fab oshpark }` when the design names one, JLCPCB when it does
-    /// not. Four routing entry points and the checker used to reach for JLCPCB
-    /// by name, so the editor graded a board against a table the command line
-    /// had already stopped using - the same design, two answers, depending on
-    /// which of the two you opened it in.
+    /// `cypcb_drc::table_for_editor`, the choice `cypcb check` and the
+    /// language server read: the board's fab, JLCPCB when it names none, each
+    /// for the board's layer count. Four routing entry points and the checker
+    /// used to reach for JLCPCB by name, and after that for the two-layer table
+    /// of whatever the board named, so the editor graded a four-layer board
+    /// against a table the command line had already stopped using.
     ///
     /// A name this tool does not have falls back rather than failing: the
     /// editor has to keep drawing a board it cannot fully understand. The
     /// fallback is not silent - `load_source` reports the unknown name as a
     /// diagnostic on the line that wrote it.
     fn preset(&self) -> cypcb_rules::presets::RulesPreset {
-        self.world
-            .fab()
-            .and_then(cypcb_rules::presets::RulesPreset::from_name)
-            .unwrap_or(cypcb_rules::presets::RulesPreset::JlcpcbStandard2Layer)
+        cypcb_drc::table_for_editor(&self.world).0
     }
 
     /// Run DRC against the fab the board named.

@@ -60,7 +60,7 @@ pub fn run_diagnostics(doc: &DocumentState) -> Vec<Diagnostic> {
     }
 
     // 4. A fab name this tool does not have. The board is still checked -
-    //    against JLCPCB - so this is a warning rather than an error, and it
+    //    against JLCPCB for its layer count - so this is a warning rather than an error, and it
     //    sits on the word that caused it because that is where the fix goes.
     if let Some(unknown) = &doc.fab_fallback {
         let available: Vec<&str> = cypcb_drc::Preset::all()
@@ -79,8 +79,9 @@ pub fn run_diagnostics(doc: &DocumentState) -> Vec<Diagnostic> {
             source: "cypcb",
             message: format!(
                 "The board asks for fab '{}', which is not a preset this tool has. \
-                 Checking against jlcpcb instead. Available presets: {}",
+                 Checking against {} instead. Available presets: {}",
                 unknown.named,
+                doc.checked_against.map_or("jlcpcb", |preset| preset.name()),
                 available.join(", ")
             ),
         });

@@ -40,10 +40,15 @@ They carry two sources:
 
 - `cypcb-parser` - syntax errors, unknown units, unknown component types, each
   on the span that caused it.
-- `cypcb-drc` - design rule violations against the JLCPCB 2-layer rules, on the
-  line where the part or trace is written. `unconnected-pin` and
+- `cypcb-drc` - design rule violations against the fab table `cypcb check`
+  uses for the same board, on the line where the part or trace is written. The
+  choice of table is described once, under `fab` in `docs/SYNTAX.md`: the
+  board's `fab`, else JLCPCB, for the board's layer count. `unconnected-pin` and
   `unrouted-pin` come back as warnings rather than errors: a part exists before
   its net does, and a board being written is not a broken board.
+- `cypcb` - a `fab` name this tool does not have, as a warning with the code
+  `cypcb::unknown-fab` on the name. The board is still checked, against the
+  JLCPCB table for its layer count, and the message names that table.
 
 The list is capped at 100 diagnostics per file, with a final entry saying how
 many were dropped.
