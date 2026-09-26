@@ -150,7 +150,10 @@ impl DocumentState {
         };
 
         let mut world = BoardWorld::new();
-        let mut library = FootprintLibrary::new();
+        let mut library = match &self.path {
+            Some(path) => cypcb_library::design::footprint_library_for(&resolved, path),
+            None => FootprintLibrary::new(),
+        };
         let sync_result = sync_ast_to_world(&resolved, &self.content, &mut world, &mut library);
         self.sync_errors = sync_result.errors.clone();
 

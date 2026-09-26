@@ -6,7 +6,6 @@ use clap::Args;
 use miette::{IntoDiagnostic, Result, WrapErr};
 
 use cypcb_drc::PresetRules;
-use cypcb_world::footprint::FootprintLibrary;
 use cypcb_world::sync_ast_to_world;
 use cypcb_world::BoardWorld;
 
@@ -57,7 +56,7 @@ impl ToKicadCommand {
         }
 
         let mut world = BoardWorld::new();
-        let mut library = FootprintLibrary::new();
+        let mut library = cypcb_library::design::footprint_library_for(&ast, &self.file);
         let sync = sync_ast_to_world(&ast, &source, &mut world, &mut library);
         if !sync.errors.is_empty() {
             for error in &sync.errors {

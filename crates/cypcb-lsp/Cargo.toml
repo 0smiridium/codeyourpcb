@@ -24,6 +24,7 @@ cypcb-parser = { path = "../cypcb-parser" }
 cypcb-world = { path = "../cypcb-world", features = ["sync"] }
 cypcb-drc = { path = "../cypcb-drc" }
 cypcb-calc = { path = "../cypcb-calc" }
+cypcb-library = { path = "../cypcb-library" }
 
 # External dependencies - always needed
 miette.workspace = true

@@ -136,7 +136,7 @@ impl WatchCommand {
         }
 
         let mut world = cypcb_world::BoardWorld::new();
-        let mut library = cypcb_world::footprint::FootprintLibrary::new();
+        let mut library = cypcb_library::design::footprint_library_for(&ast, &self.file);
         let mut sync = cypcb_world::sync_ast_to_world(&ast, &source, &mut world, &mut library);
         if !sync.errors.is_empty() {
             let first = sync.errors.remove(0);

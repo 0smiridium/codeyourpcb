@@ -183,7 +183,7 @@ impl ParseCommand {
                 }
 
                 let mut world = BoardWorld::new();
-                let mut library = FootprintLibrary::new();
+                let mut library = cypcb_library::design::footprint_library_for(&ast, &self.file);
                 let sync_result = sync_ast_to_world(&ast, &source, &mut world, &mut library);
                 if !sync_result.errors.is_empty() {
                     for err in &sync_result.errors {
