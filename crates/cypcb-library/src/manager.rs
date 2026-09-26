@@ -1,5 +1,5 @@
 use crate::error::LibraryError;
-use crate::models::{Component, LibraryInfo, SearchFilters, SearchResult};
+use crate::models::{Component, ComponentId, LibraryInfo, SearchFilters, SearchResult};
 use crate::schema;
 use crate::search;
 use crate::sources::custom::CustomSource;
@@ -239,6 +239,13 @@ impl LibraryManager {
     pub fn component_count(&self) -> Result<usize, LibraryError> {
         let conn = self.conn.lock().unwrap();
         search::component_count(&conn)
+    }
+
+    /// Every component that carries a footprint, by the id `library search`
+    /// prints and a design writes.
+    pub fn footprint_ids(&self) -> Result<Vec<ComponentId>, LibraryError> {
+        let conn = self.conn.lock().unwrap();
+        schema::footprint_ids(&conn)
     }
 
     // ========== Custom Library Operations ==========
