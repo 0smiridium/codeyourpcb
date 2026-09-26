@@ -484,7 +484,7 @@ where 45 belonged.
 
 In this repo: the angle is enforced and the teardrop is not. `PadEntryRule`
 is in the registry
-(`crates/cypcb-drc/src/lib.rs:170`) and reports through `entry_angle`
+(`crates/cypcb-drc/src/lib.rs:172`) and reports through `entry_angle`
 (`crates/cypcb-drc/src/rules/pad_entry.rs:212`) and `entry_angle_placed`
 (`:257`), the second of which is the change of frame and nothing else: it
 carries the trace's two points into a placed and rotated pad's own frame rather
@@ -1328,10 +1328,10 @@ this page is a counter-example to that sentence on the same page.
 
 | rule | what enforces it |
 |---|---|
-| R-01 width against current | `TraceCurrentRule` (`crates/cypcb-drc/src/lib.rs:149`), silent on a net that declares no `current` |
-| R-03 acute angles | `AcuteAngleRule` (`crates/cypcb-drc/src/lib.rs:207`), reporting `ViolationKind::AcidTrap` |
+| R-01 width against current | `TraceCurrentRule` (`crates/cypcb-drc/src/lib.rs:151`), silent on a net that declares no `current` |
+| R-03 acute angles | `AcuteAngleRule` (`crates/cypcb-drc/src/lib.rs:209`), reporting `ViolationKind::AcidTrap` |
 | R-07 annular ring and hole spacing | six rules - `AnnularRingRule`, `HoleToHoleRule`, `ViaDiameterRule`, `ViaDrillRule`, `PadLandRule`, `DrillAspectRatioRule` |
-| R-08 trace entry into a land | `PadEntryRule` (`crates/cypcb-drc/src/lib.rs:170`), reporting `ViolationKind::PadEntry`; the angle only. The teardrop half is not merely unwritten - the copper it would check is synthesised in the Gerber writer and is not in the board the checker walks |
+| R-08 trace entry into a land | `PadEntryRule` (`crates/cypcb-drc/src/lib.rs:172`), reporting `ViolationKind::PadEntry`; the angle only. The teardrop half is not merely unwritten - the copper it would check is synthesised in the Gerber writer and is not in the board the checker walks |
 | R-19 the flat clearance minimum | `ClearanceRule`, first in the registry, firing more than the rest together |
 
 **Bucket 2 - checkable today, nobody wrote the check. Ten.** Checkable is
@@ -1823,7 +1823,7 @@ of copper on one net is outside R-19's scope by definition, and any rule that
 needs to see one has to measure geometry rather than clearance.**
 
 **In this repo:** enforced. `ClearanceRule` is the first entry in the registry
-(`crates/cypcb-drc/src/lib.rs:135`). Measured on one board rather than claimed
+(`crates/cypcb-drc/src/lib.rs:137`). Measured on one board rather than claimed
 for all six: on `shift_driver` with `stop_at_own_copper` on, **0 of 10 rows**
 carry the `Clearance` kind. That figure is held rather than quoted:
 `the_board_that_got_worse_was_paying_for_the_via_optimizer` asserts the 0
@@ -3096,7 +3096,7 @@ sed -n '419,427p' crates/cypcb-rules/src/presets/mod.rs
 grep -n "min_clearance" crates/cypcb-rules/src/presets/*.rs
 
 # R-19: the rule that fires most is the first one the registry runs
-sed -n '134p' crates/cypcb-drc/src/lib.rs
+sed -n '136p' crates/cypcb-drc/src/lib.rs
 
 # A rule with no subject: what the fixtures actually carry
 for f in tests/fixtures/benchmark/*.kicad_pcb; do

@@ -92,6 +92,9 @@ pub struct DocumentState {
     /// it says while it does. Byte offsets, converted to a range when the
     /// diagnostic is built.
     pub fab_fallback: Option<UnknownFab>,
+
+    /// The table the last check used, as `cypcb check` names it.
+    pub checked_against: Option<cypcb_drc::Preset>,
     /// Where this document lives, when it lives anywhere.
     ///
     /// `import "lib/blocks.cypcb"` resolves against the importing file's own
@@ -129,6 +132,7 @@ impl DocumentState {
             sync_errors: Vec::new(),
             import_errors: Vec::new(),
             fab_fallback: None,
+            checked_against: None,
             path: path_of(&uri),
             encoding: Encoding::default(),
         }
@@ -145,6 +149,7 @@ impl DocumentState {
         self.sync_errors.clear();
         self.import_errors.clear();
         self.fab_fallback = None;
+        self.checked_against = None;
     }
 
     /// Parse the document content and update AST and errors.
@@ -191,30 +196,25 @@ impl DocumentState {
         let sync_result = sync_ast_to_world(&resolved, &self.content, &mut world, &mut library);
         self.sync_errors = sync_result.errors.clone();
 
-        // Run DRC against the fab the board named, which is the same question
-        // `cypcb check` and the browser both ask. This was `DesignRules::default()`
-        // - JLCPCB - on every document, so a board written `fab oshpark` was
-        // underlined in the editor against a table it was never meant for.
+        // Run DRC against the table `cypcb check` uses for this board: the
+        // board's fab, JLCPCB when it names none, each for the board's layer
+        // count. The choice is `cypcb_drc::table_for_editor`, the one the
+        // command line and the browser read, so the three cannot drift apart.
         //
         // A name this tool does not have falls back rather than failing, the way
         // the viewer does: a language server that stops reporting anything
         // because one word is wrong is worse than one checking against the
-        // default. Unlike the viewer, nothing here says so yet - recorded.
-        self.fab_fallback = None;
-        let preset = match world.fab() {
-            Some(named) => cypcb_drc::Preset::from_name(named).unwrap_or_else(|| {
-                self.fab_fallback = Some(UnknownFab {
-                    named: named.to_string(),
-                    span: resolved
-                        .board()
-                        .and_then(|board| board.fab.as_ref())
-                        .map(|fab| (fab.span.start, fab.span.end))
-                        .unwrap_or((0, 0)),
-                });
-                cypcb_drc::Preset::JlcpcbStandard2Layer
-            }),
-            None => cypcb_drc::Preset::JlcpcbStandard2Layer,
-        };
+        // default. The fallback is reported on the line that wrote the name.
+        let (preset, unknown) = cypcb_drc::table_for_editor(&world);
+        self.fab_fallback = unknown.map(|unknown| UnknownFab {
+            named: unknown.name,
+            span: resolved
+                .board()
+                .and_then(|board| board.fab.as_ref())
+                .map(|fab| (fab.span.start, fab.span.end))
+                .unwrap_or((0, 0)),
+        });
+        self.checked_against = Some(preset);
         let rules = preset.rules();
         let drc_result = run_drc(&mut world, &rules);
         self.drc_violations = drc_result.violations;

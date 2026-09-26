@@ -76,6 +76,11 @@ const QUESTIONS: Record<Exclude<keyof PcbEngine, 'free'>, { ask: Question; excep
   register_footprint: { ask: (e) => e.register_footprint('CONTRACT_PART', [PAD], []) },
   register_3d_model: { ask: (e) => e.register_3d_model('CONTRACT_PART', '00000000-0000-0000-0000-000000000000') },
   get_diagnostics_json: { ask: (e) => e.get_diagnostics_json() },
+  drc_table: {
+    ask: (e) => e.drc_table(),
+    except: 'the mock checks nothing, so it names no table',
+    share: (kind) => kind === 'empty text' || kind === 'plain text',
+  },
   load_source: {
     ask: (e) => e.load_source(BOARD),
     except: 'the mock has no reader of the language and refuses every load (docs/one-parser.md)',
@@ -152,6 +157,7 @@ const REACHED_BY: Record<keyof WasmPcbEngine, keyof PcbEngine | { unreached: str
   load_snapshot: { unreached: 'the host sent a parsed snapshot before the engine had a reader; nothing sends one now' },
   get_snapshot: 'get_snapshot',
   get_diagnostics_json: 'get_diagnostics_json',
+  drc_table: 'drc_table',
   query_point: 'query_point',
   add_trace: { unreached: 'the adapter adds traces through add_trace_json' },
   add_trace_json: 'add_trace',

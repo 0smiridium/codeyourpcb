@@ -113,14 +113,36 @@ The flag still wins when it is given, so a question about a specific fab is not
 overridden by the file. A board that names none is checked against JLCPCB, which
 is what this project has always defaulted to.
 
+A house publishes one table per layer count, so a house name follows the board's
+`layers`. JLCPCB, standard and advanced, and OSHPark have a four-layer table;
+PCBWay, the IPC classes and `prototype` have one table for every layer count. A
+name that states its layer count, such as `--preset jlcpcb_standard_2layer`, is
+taken as written.
+
+| Board says | Checked against |
+|---|---|
+| `layers 2` | `jlcpcb_standard_2layer` |
+| `layers 4` | `jlcpcb_standard_4layer` |
+| `layers 4`, `fab jlcpcb` | `jlcpcb_standard_4layer` |
+| `layers 2`, `fab oshpark` | `oshpark_2layer` |
+| `layers 4`, `fab oshpark` | `oshpark_4layer` |
+| `layers 4`, `fab pcbway` | `pcbway_standard` |
+| `layers 4`, `fab jlpcb` | `jlcpcb_standard_4layer`, with a warning in the editors; `cypcb check` refuses the name |
+
 `cypcb export` reads it always. Its own `--house` answers a different question
 - what a fabricator wants the files called - so it has no say in which rules the
 board is checked against on the way out.
 
-The editor and the language server read it too, and neither can refuse a name it
-does not have, because both still have to show you the board. They fall back to
-JLCPCB and say so: the viewer as a diagnostic on the word, the server as a
-warning underlining it.
+The browser editor and the language server read it too, through the function
+the command line calls (`cypcb_drc::table_for`), so the three check a board
+against the same table. Neither editor can refuse a name it does not have,
+because both still have to show you the board. They fall back to JLCPCB for the
+board's layer count and say so: the viewer as a diagnostic on the word, the
+server as a warning underlining it. `cypcb check` names the table after
+"against"; the viewer's status bar reads `DRC against` and the table.
+`crates/cypcb-cli/tests/three_surfaces_check_against_one_table.rs` holds the three
+to one table, and `crates/cypcb-lsp/tests/the_manual_matches_the_server.rs` holds
+the table above to what the language server does.
 
 Run `cypcb check --preset ?` against any board to see the names, or read them
 off a refusal: an unknown fab is reported with the full list, and the message

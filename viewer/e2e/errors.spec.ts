@@ -35,6 +35,20 @@ test.describe('Error Display', () => {
     expect(hasSnapshot).toBe(true);
   });
 
+  // The count means nothing without the table it was measured against. A
+  // four-layer board was checked here against the two-layer table while
+  // `cypcb check` used the four-layer one, and the screen did not say which.
+  test('the status names the fab table the board is checked against', async ({ page }) => {
+    const board = (layers: number, fab: string) =>
+      `version 1\nboard t {\n  size 50mm x 50mm\n  layers ${layers}\n${fab}}`;
+
+    await page.evaluate((src) => (window as any).__loadBoard(src), board(4, ''));
+    await expect(page.locator('#drc-table')).toHaveText('DRC against jlcpcb_standard_4layer');
+
+    await page.evaluate((src) => (window as any).__loadBoard(src), board(2, '  fab oshpark\n'));
+    await expect(page.locator('#drc-table')).toHaveText('DRC against oshpark_2layer');
+  });
+
   test('DRC violations show error badge', async ({ page }) => {
     // Open editor and input DRC-triggering code
     await page.click('#editor-toggle');

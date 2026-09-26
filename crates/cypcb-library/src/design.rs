@@ -17,8 +17,10 @@
 //! one, so the index cannot shadow a built-in, and the design's own definition
 //! is registered over this one by the sync.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::SystemTime;
 
 use cypcb_parser::ast::{Definition, SourceFile};
 use cypcb_world::footprint::FootprintLibrary;
@@ -100,15 +102,74 @@ fn collect(definitions: &[Definition], names: &mut BTreeSet<String>) {
 ///
 /// Empty when there is no index or it cannot be read, as
 /// [`footprint_library_for`] is silent about both.
-pub fn index_names_for(design: &Path) -> Vec<String> {
+///
+/// The editor asks on every completion, and an index built from the KiCad
+/// library holds some ten thousand names, so a reading is kept per index file
+/// and reused until the file changes. "Changes" is its modification time, its
+/// length and the change counter SQLite writes into the header on every
+/// commit: the time alone can repeat when two imports land inside one clock
+/// tick of the file system, and the counter cannot.
+pub fn index_names_for(design: &Path) -> Arc<[String]> {
     let Some(index) = index_for(design) else {
-        return Vec::new();
+        return Arc::from([]);
     };
-    let Ok(manager) = LibraryManager::new(&index) else {
-        return Vec::new();
+    let Some(stamp) = Stamp::of(&index) else {
+        return Arc::from([]);
+    };
+    let readings = READINGS.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Some(reading) = readings.lock().unwrap().get(&index) {
+        if reading.stamp == stamp {
+            return Arc::clone(&reading.names);
+        }
+    }
+    let names = read_names(&index);
+    readings.lock().unwrap().insert(
+        index,
+        Reading {
+            stamp,
+            names: Arc::clone(&names),
+        },
+    );
+    names
+}
+
+fn read_names(index: &Path) -> Arc<[String]> {
+    let Ok(manager) = LibraryManager::new(index) else {
+        return Arc::from([]);
     };
     manager
         .footprint_ids()
         .map(|ids| ids.iter().map(|id| id.to_string()).collect())
-        .unwrap_or_default()
+        .unwrap_or_else(|_| Arc::from([]))
+}
+
+/// Names read from each index file, with the stamp the file had when read.
+static READINGS: OnceLock<Mutex<HashMap<PathBuf, Reading>>> = OnceLock::new();
+
+struct Reading {
+    stamp: Stamp,
+    names: Arc<[String]>,
+}
+
+/// What an index file looks like from outside, without opening the database.
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct Stamp {
+    modified: SystemTime,
+    len: u64,
+    /// Bytes 24..28 of the file: SQLite's file change counter.
+    change_counter: [u8; 4],
+}
+
+impl Stamp {
+    fn of(index: &Path) -> Option<Stamp> {
+        let metadata = std::fs::metadata(index).ok()?;
+        let mut header = [0u8; 28];
+        let mut file = std::fs::File::open(index).ok()?;
+        std::io::Read::read_exact(&mut file, &mut header).ok()?;
+        Some(Stamp {
+            modified: metadata.modified().ok()?,
+            len: metadata.len(),
+            change_counter: [header[24], header[25], header[26], header[27]],
+        })
+    }
 }

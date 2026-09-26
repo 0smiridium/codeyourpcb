@@ -227,6 +227,27 @@ export class PcbEngine {
         }
     }
     /**
+     * The table the board is checked against, named as `cypcb check` names
+     * it after "against", so the status can say what the count is measured by.
+     * @returns {string}
+     */
+    drc_table() {
+        let deferred1_0;
+        let deferred1_1;
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.pcbengine_drc_table(retptr, this.__wbg_ptr);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            deferred1_0 = r0;
+            deferred1_1 = r1;
+            return getStringFromWasm0(r0, r1);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+            wasm.__wbindgen_export4(deferred1_0, deferred1_1, 1);
+        }
+    }
+    /**
      * Export all traces and vias as DSL `trace` blocks.
      *
      * Iterates all Trace and Via entities in the ECS, groups them by net,

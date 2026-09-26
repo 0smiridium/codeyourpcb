@@ -169,6 +169,11 @@ export interface PcbEngine {
    * number - which no message writes, so every squiggle landed on line 1.
    */
   get_diagnostics_json(): string;
+  /**
+   * The fab table the board is checked against, named as `cypcb check`
+   * names it after "against". Empty when no engine checked anything.
+   */
+  drc_table(): string;
   /** Load and parse a .cypcb source file, returns error message if failed */
   load_source(source: string): string;
 
@@ -356,6 +361,7 @@ export interface WasmPcbEngine {
   register_footprint(name: string, pads: PadInfo[], silk: SilkShape[]): string;
   register_3d_model(package_name: string, model: string): void;
   get_diagnostics_json(): string;
+  drc_table(): string;
   free(): void;
 }
 
@@ -623,6 +629,10 @@ export class WasmPcbEngineAdapter implements PcbEngine {
 
   get_diagnostics_json(): string {
     return this.wasmEngine.get_diagnostics_json();
+  }
+
+  drc_table(): string {
+    return this.wasmEngine.drc_table();
   }
 
   load_source_with_imports(source: string, files: Record<string, string>): string {
@@ -907,6 +917,11 @@ export class MockPcbEngine implements PcbEngine {
     // The fallback engine does not read the language, so it has nothing to
     // say about a line of it.
     return '[]';
+  }
+
+  drc_table(): string {
+    // The fallback engine checks nothing, so it checks against nothing.
+    return '';
   }
 
   load_source_with_imports(source: string, _files: Record<string, string>): string {

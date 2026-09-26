@@ -90,6 +90,11 @@ export class PcbEngine {
      */
     design_not_written(): string;
     /**
+     * The table the board is checked against, named as `cypcb check` names
+     * it after "against", so the status can say what the count is measured by.
+     */
+    drc_table(): string;
+    /**
      * Export all traces and vias as DSL `trace` blocks.
      *
      * Iterates all Trace and Via entities in the ECS, groups them by net,
@@ -307,6 +312,7 @@ export interface InitOutput {
     readonly pcbengine_auto_route_with_params: (a: number, b: number, c: number, d: number) => void;
     readonly pcbengine_design_as_dsl: (a: number, b: number) => void;
     readonly pcbengine_design_not_written: (a: number, b: number) => void;
+    readonly pcbengine_drc_table: (a: number, b: number) => void;
     readonly pcbengine_export_traces_as_dsl: (a: number, b: number) => void;
     readonly pcbengine_get_diagnostics_json: (a: number, b: number) => void;
     readonly pcbengine_get_min_clearance_nm: (a: number) => bigint;

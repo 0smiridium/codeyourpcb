@@ -269,7 +269,9 @@ and process, and the lookup that turns a name into it.
 
 Every command that measures a board - `check`, `route`, `score`, `export` -
 resolves its `--preset` through this crate, which is what makes their numbers
-agree on the same file.
+agree on the same file. Which table a board gets when nobody names one is
+`cypcb_drc::table_for`, read by the command line, the language server and the
+browser engine alike, and described once under `fab` in `docs/SYNTAX.md`.
 
 ### cypcb-export
 
