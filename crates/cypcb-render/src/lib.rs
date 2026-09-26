@@ -1073,179 +1073,19 @@ impl PcbEngine {
         }
     }
 
-    /// Rebuild the spatial index including components, traces, and vias.
+    /// Rebuild the spatial index after an edit, with the builder the world
+    /// uses when a design is loaded.
+    ///
+    /// The checker reads parts from the index as their courtyards, with pad
+    /// copper looked up per part. A second builder here indexed pad entities
+    /// that a loaded design never spawns and parts on no layer, so after the
+    /// first trace was drawn two pads closer than the rule allows stopped
+    /// reading as too close.
     fn rebuild_spatial_index_full(&mut self) {
-        use cypcb_world::components::trace::{Trace as TraceComp, Via};
-        use cypcb_world::components::{FootprintRef, Position, Rotation};
-        use cypcb_world::SpatialEntry;
-        use std::collections::HashMap;
-
-        let mut entries = Vec::new();
-
-        // ---- Index individual pad entities ----
-        // Each pad was spawned as a separate entity with PadInstance + NetId + Position.
-        // We look up the footprint to get pad size/layer for the AABB.
-        {
-            let ecs = self.world.ecs_mut();
-            let mut query = ecs.query::<(Entity, &PadInstance, &Position)>();
-            let pad_entities: Vec<_> = query
-                .iter(ecs)
-                .map(|(e, pi, pos)| (e, pi.parent, pos.0))
-                .collect();
-
-            // Also need parent component's footprint to get pad sizes
-            let mut fp_query = ecs.query::<(Entity, &FootprintRef, &Position, &Rotation)>();
-            let comps: Vec<_> = fp_query
-                .iter(ecs)
-                .map(|(e, f, p, r)| (e, f.as_str().to_string(), p.0, r.0))
-                .collect();
-
-            // Build parent entity -> (footprint_name, comp_pos, rotation) map
-            let comp_map: HashMap<u32, (&str, Point, i32)> = comps
-                .iter()
-                .map(|(e, f, p, r)| (e.index(), (f.as_str(), *p, *r)))
-                .collect();
-
-            for (entity, parent, pad_pos) in &pad_entities {
-                // Find pad definition by matching position
-                if let Some(&(fp_name, _comp_pos, _rotation)) = comp_map.get(&parent.index()) {
-                    if let Some(fp) = self.footprint_lib.get(fp_name) {
-                        // Find the pad definition closest to this pad's position
-                        // (since pad entities store world position)
-                        let mut best_pad: Option<&cypcb_world::footprint::PadDef> = None;
-                        let mut best_dist = i64::MAX;
-
-                        let rotation = Rotation(_rotation);
-
-                        for pd in &fp.pads {
-                            let at = cypcb_world::components::place_pad(
-                                _comp_pos,
-                                pd.position,
-                                rotation,
-                            );
-                            let dist = (at.x.0 - pad_pos.x.0).abs() + (at.y.0 - pad_pos.y.0).abs();
-                            if dist < best_dist {
-                                best_dist = dist;
-                                best_pad = Some(pd);
-                            }
-                        }
-
-                        if let Some(pd) = best_pad {
-                            // The pad's own rectangle about its centre, turned
-                            // with the part and boxed.
-                            let half = cypcb_core::Rect::new(
-                                Point::new(Nm(-pd.size.0 .0 / 2), Nm(-pd.size.1 .0 / 2)),
-                                Point::new(Nm(pd.size.0 .0 / 2), Nm(pd.size.1 .0 / 2)),
-                            );
-                            let copper = cypcb_world::components::place_box(
-                                *pad_pos,
-                                half,
-                                Rotation(rotation.0 + pd.rotation.0),
-                            );
-                            let layer_mask = if pd.layers.is_empty() {
-                                0xFFFFFFFF
-                            } else {
-                                pd.copper_mask()
-                            };
-                            entries.push(SpatialEntry::from_raw(
-                                *entity,
-                                copper.min.x.0,
-                                copper.min.y.0,
-                                copper.max.x.0,
-                                copper.max.y.0,
-                                layer_mask,
-                            ));
-                        }
-                    }
-                }
-            }
-        }
-
-        // ---- Also index component courtyards (for non-copper DRC like courtyard overlap) ----
-        {
-            let ecs = self.world.ecs_mut();
-            let mut query = ecs.query::<(Entity, &Position, &FootprintRef, Option<&Rotation>)>();
-            let items: Vec<_> = query
-                .iter(ecs)
-                .map(|(e, p, f, r)| {
-                    (
-                        e,
-                        p.0,
-                        f.as_str().to_string(),
-                        r.copied().unwrap_or(Rotation::ZERO),
-                    )
-                })
-                .collect();
-
-            // Skip courtyard indexing for copper clearance — pads are indexed above.
-            // We still keep courtyards for other DRC rules (courtyard clearance, etc.)
-            // but mark them with layer_mask = 0 so copper clearance check skips them.
-            for (entity, pos, footprint_name, rotation) in &items {
-                if let Some(fp) = self.footprint_lib.get(footprint_name) {
-                    let placed = cypcb_world::components::place_box(*pos, fp.courtyard, *rotation);
-                    // layer_mask = 0 means this entry won't match any copper layer check
-                    entries.push(SpatialEntry::new(*entity, placed.min, placed.max, 0));
-                }
-            }
-        }
-
-        // ---- Index trace segments ----
-        {
-            let ecs = self.world.ecs_mut();
-            let mut query = ecs.query::<(Entity, &TraceComp)>();
-            let traces: Vec<_> = query
-                .iter(ecs)
-                .map(|(e, t)| {
-                    let segs: Vec<_> = t.segments.iter().map(|s| (s.start, s.end)).collect();
-                    (e, t.width.0, t.layer.to_copper_mask(), segs)
-                })
-                .collect();
-
-            for (entity, width, layer_mask, segs) in &traces {
-                let half_width = width / 2;
-                for (start, end) in segs {
-                    let min_x = start.x.0.min(end.x.0) - half_width;
-                    let min_y = start.y.0.min(end.y.0) - half_width;
-                    let max_x = start.x.0.max(end.x.0) + half_width;
-                    let max_y = start.y.0.max(end.y.0) + half_width;
-                    entries.push(SpatialEntry::from_raw(
-                        *entity,
-                        min_x,
-                        min_y,
-                        max_x,
-                        max_y,
-                        *layer_mask,
-                    ));
-                }
-            }
-        }
-
-        // ---- Index vias ----
-        {
-            let ecs = self.world.ecs_mut();
-            let mut query = ecs.query::<(Entity, &Via)>();
-            let vias: Vec<_> = query
-                .iter(ecs)
-                .map(|(e, v)| (e, v.position, v.outer_diameter.0 / 2, v.copper_mask()))
-                .collect();
-
-            for (entity, position, radius, layer_mask) in &vias {
-                entries.push(SpatialEntry::from_raw(
-                    *entity,
-                    position.x.0 - radius,
-                    position.y.0 - radius,
-                    position.x.0 + radius,
-                    position.y.0 + radius,
-                    *layer_mask,
-                ));
-            }
-        }
-
         self.world
-            .ecs_mut()
-            .resource_mut::<cypcb_world::SpatialIndex>()
-            .rebuild(entries);
+            .rebuild_spatial_index_from_library(&self.footprint_lib);
     }
+
     /// Clear autorouted traces and vias from the world.
     fn clear_autorouted_traces(&mut self) {
         use cypcb_world::components::trace::{RouterPlaced, Trace, TraceSource, Via};

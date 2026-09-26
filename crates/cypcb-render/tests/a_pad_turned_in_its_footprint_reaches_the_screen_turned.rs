@@ -94,3 +94,23 @@ fn the_checker_in_the_browser_measures_the_pad_as_it_stands() {
         turned.get_violations_json()
     );
 }
+
+#[test]
+fn the_checker_in_the_browser_still_sees_the_turned_pad_after_a_trace_is_drawn() {
+    // The index is rebuilt after every edit. A trace drawn far from both
+    // parts leaves the pads where they were, so the fault they make stays.
+    let mut turned = engine(" rotate 90");
+    let id = turned.add_trace(
+        "A",
+        "Top",
+        250_000,
+        &[20_000_000, 5_000_000, 25_000_000, 5_000_000],
+    );
+    assert_ne!(id, u32::MAX, "the trace is drawn");
+    turned.run_drc_incremental();
+    assert!(
+        clearance_violations(&turned) > 0,
+        "the turned pads still come too close: {}",
+        turned.get_violations_json()
+    );
+}
