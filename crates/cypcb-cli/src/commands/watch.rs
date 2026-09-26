@@ -45,9 +45,11 @@ impl WatchCommand {
             .into_diagnostic()
             .wrap_err_with(|| format!("Failed to read {}", self.file.display()))?;
 
-        println!("Watching {} - press Ctrl+C to stop", self.file.display());
-        self.check_once();
-
+        // Armed before the first check, and the bytes read before it too. The
+        // first version checked, then armed: a save that landed in between
+        // was never seen, and the terminal kept showing the board as it was
+        // before that save. With 500ms put between the two, the watch test
+        // waited its full 60s for a check that never came.
         let watcher = FileWatcher::new(&directory)
             .map_err(|e| miette::miette!("{e}"))
             .wrap_err_with(|| format!("Failed to watch {}", directory.display()))?;
@@ -56,12 +58,16 @@ impl WatchCommand {
         // a save as a stream of notifications - measured at one every 200ms
         // for as long as the command ran, 24 checks for a single edit - and a
         // file whose bytes have not moved is not a save whatever the operating
-        // system says about it.
+        // system says about it. A save after this read and before the check
+        // below is checked twice, which is the harmless way round.
         let mut last_seen: std::collections::HashMap<PathBuf, Vec<u8>> =
             std::collections::HashMap::new();
         if let Ok(bytes) = std::fs::read(&watched) {
             last_seen.insert(watched.clone(), bytes);
         }
+
+        println!("Watching {} - press Ctrl+C to stop", self.file.display());
+        self.check_once();
 
         loop {
             match watcher.recv() {

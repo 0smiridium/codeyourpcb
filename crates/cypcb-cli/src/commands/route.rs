@@ -918,16 +918,20 @@ fn say_what_the_checker_finds(world: &mut BoardWorld, preset: &cypcb_rules::pres
     use cypcb_drc::PresetRules;
     let report = cypcb_drc::run_drc(world, &preset.rules());
     let shorts = cypcb_drc::shorts(&report.violations);
+    // The table goes in the line: a count means nothing without the rules it
+    // was counted against, and `check` has always said which.
     if shorts > 0 {
         eprintln!(
-            "DRC on the routed board: {} violations, {} of them copper touching copper",
+            "DRC on the routed board: {} violations against {}, {} of them copper touching copper",
             report.violations.len(),
+            preset.name(),
             shorts
         );
     } else {
         eprintln!(
-            "DRC on the routed board: {} violations, none of them touching",
-            report.violations.len()
+            "DRC on the routed board: {} violations against {}, none of them touching",
+            report.violations.len(),
+            preset.name()
         );
     }
 }

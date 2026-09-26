@@ -95,7 +95,8 @@ fn saving_a_design_checks_it_again() {
             .expect("the binary runs"),
     );
 
-    // The first check happens before anything is watched.
+    // The first check comes after the watch is armed, so once it is in the log
+    // a save cannot fall between the two.
     let first = wait_for_checks(&log_path, 1, "the first check");
     assert!(
         first.contains("Watching"),

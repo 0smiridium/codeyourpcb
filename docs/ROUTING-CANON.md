@@ -2215,6 +2215,10 @@ fields. Six of them enter the composite.
 | `layer_balance` | 0.0 to 1.0 | `compute_layer_balance`, over `copper_length_per_layer` | yes, `(1-b) * 50` |
 | `composite` | dimensionless, lower is better | `compute_composite` | - |
 
+`cypcb score` prints these fields as JSON led by `preset`, the fab table the
+rows were counted against. It is the table `cypcb check` names for the same
+board; the choice is described under `fab` in `docs/SYNTAX.md`.
+
 Every term is multiplied by its `ScoreWeights` field before it is summed - the
 struct with its defaults, and the sum inside `compute_composite` - and all six
 default to 1.0. So the "in composite" column is the term a default
