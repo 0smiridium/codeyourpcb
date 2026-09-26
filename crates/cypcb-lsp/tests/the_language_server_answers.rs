@@ -25,7 +25,7 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::mpsc::{channel, Receiver, RecvTimeoutError};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 
@@ -859,4 +859,105 @@ fn a_client_that_offers_only_utf32_is_counted_in_utf16() {
         json!({"general": {"positionEncodings": ["utf-32"]}}),
         "utf-16",
     );
+}
+
+/// A footprint written here, so a library of any size can be built without
+/// checking a single file from KiCad into the repository.
+fn synthetic_footprint(name: &str) -> String {
+    format!(
+        "(footprint \"{name}\"\n\t(layer \"F.Cu\")\n\t(attr smd)\n\
+         \t(pad \"1\" smd rect (at -0.5 0) (size 0.5 0.5) (layers \"F.Cu\" \"F.Paste\" \"F.Mask\"))\n\
+         \t(pad \"2\" smd rect (at 0.5 0) (size 0.5 0.5) (layers \"F.Cu\" \"F.Paste\" \"F.Mask\"))\n)\n"
+    )
+}
+
+/// A project directory whose index holds `count` generated footprints, named
+/// `SYN_00000` upwards, imported the way `cypcb library import` imports.
+fn a_project_with_an_index_of(tag: &str, count: usize) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("cypcb-lsp-size-{tag}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let libraries = dir.join("libraries");
+    let pretty = libraries.join("Synthetic.pretty");
+    std::fs::create_dir_all(&pretty).expect("a place to write the library");
+    for n in 0..count {
+        let name = format!("SYN_{n:05}");
+        std::fs::write(
+            pretty.join(format!("{name}.kicad_mod")),
+            synthetic_footprint(&name),
+        )
+        .expect("the footprint is written");
+    }
+    let mut manager =
+        cypcb_library::LibraryManager::new(&dir.join("cypcb-library.db")).expect("an index");
+    manager.add_kicad_search_path(libraries.clone());
+    manager
+        .auto_import_folder(&libraries)
+        .expect("the generated library imports");
+    dir
+}
+
+const SIZED_BOARD: &str = r#"version 1
+
+board sized {
+    size 30mm x 30mm
+    layers 2
+}
+
+component R1 resistor "kicad::SYN_00001" {
+    value "330"
+    at 15mm, 15mm
+}
+"#;
+
+/// Completion inside a footprint string, against an index the size of the
+/// KiCad library, answers inside 50ms - the first request and every one after.
+///
+/// Timing, so it is not part of the suite. Run it in release:
+/// `cargo test -p cypcb-lsp --release --test the_language_server_answers -- --ignored --nocapture`
+#[test]
+#[ignore = "timing: run in release with --ignored"]
+fn completion_over_ten_thousand_indexed_names_answers_inside_50ms() {
+    const NAMES: usize = 10_000;
+    let dir = a_project_with_an_index_of("timing", NAMES);
+    let path = dir.join("board.cypcb");
+    std::fs::write(&path, SIZED_BOARD).expect("the board is written");
+    let uri = format!("file://{}", path.display());
+
+    let mut server = Server::start();
+    server.initialize();
+    server.open(&uri, SIZED_BOARD);
+    server.diagnostics_for(&uri);
+
+    let (line, character) = position_of(SIZED_BOARD, "SYN_00001\"");
+    let mut times = Vec::new();
+    let mut offered = 0;
+    for _ in 0..21 {
+        let started = Instant::now();
+        let result = server.request(
+            "textDocument/completion",
+            json!({
+                "textDocument": {"uri": uri},
+                "position": {"line": line, "character": character},
+            }),
+        );
+        times.push(started.elapsed());
+        offered = result
+            .pointer("/result")
+            .and_then(Value::as_array)
+            .map_or(0, Vec::len);
+    }
+    let first = times[0];
+    let mut after = times[1..].to_vec();
+    after.sort();
+    let median = after[after.len() / 2];
+    let worst = after[after.len() - 1];
+    eprintln!(
+        "COMPLETION names={NAMES} items={offered} first={first:?} median={median:?} worst={worst:?}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+
+    assert!(offered >= NAMES, "every indexed name is offered: {offered}");
+    let limit = Duration::from_millis(50);
+    assert!(first < limit, "the first request took {first:?}");
+    assert!(worst < limit, "the slowest later request took {worst:?}");
 }

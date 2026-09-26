@@ -30,7 +30,7 @@ hover modules without the binary.
 | Request | Capability | What it gives |
 |---|---|---|
 | Hover | `hoverProvider` | The part, net, footprint, board, zone or trace under the cursor, with its value, its pins and the nets they reach |
-| Completion | `completionProvider` | Footprint names, net names, part names, property keys, layer names and top-level keywords. Trigger characters: `.`, space and `"`. Footprint names are the built-ins, the design's own `footprint` blocks and every `source::name` in the nearest `cypcb-library.db`, written the way `cypcb library search` prints them |
+| Completion | `completionProvider` | Footprint names, net names, part names, property keys, layer names and top-level keywords. Trigger characters: `.`, space and `"`. Footprint names are the built-ins, the design's own `footprint` blocks and every `source::name` in the nearest `cypcb-library.db`, written the way `cypcb library search` prints them. The index is read once and read again when the file changes, so a `cypcb library import` shows up on the next request |
 | Go to definition | `definitionProvider` | From a pin reference or a net name to where that part or net is declared, in the same file |
 | Document sync | `textDocumentSync` | Full text on open and on change, and the text again on save |
 | Position encoding | `positionEncoding` | What a column counts: `utf-8` when the client offers it in `general.positionEncodings`, otherwise `utf-16`, the protocol's default. Diagnostics, hover, completion and go to definition all convert through one function |
@@ -97,6 +97,10 @@ cargo test -p cypcb-lsp
 
 # What the server actually advertises, which the table above has to match.
 cargo test -p cypcb-lsp --test the_manual_matches_the_server
+
+# Completion against 10,000 generated index names, inside 50ms. Timing, so it
+# runs only when asked for, and only means something in release.
+cargo test -p cypcb-lsp --release --test the_language_server_answers -- --ignored --nocapture
 ```
 
 Last verified: 2026-09-27.

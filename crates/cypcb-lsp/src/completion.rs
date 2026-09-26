@@ -395,10 +395,10 @@ pub fn footprint_completions_for(doc: &DocumentState) -> Vec<CompletionItem> {
     if let Some(path) = &doc.path {
         let offered: std::collections::HashSet<String> =
             items.iter().map(|item| item.label.clone()).collect();
-        for name in cypcb_library::design::index_names_for(path) {
-            if !offered.contains(&name) {
+        for name in cypcb_library::design::index_names_for(path).iter() {
+            if !offered.contains(name) {
                 items.push(
-                    CompletionItem::new(name, CompletionItemKind::Class)
+                    CompletionItem::new(name.clone(), CompletionItemKind::Class)
                         .with_detail(format!("from {}", cypcb_library::design::INDEX_FILE)),
                 );
             }

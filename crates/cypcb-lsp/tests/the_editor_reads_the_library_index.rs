@@ -209,3 +209,110 @@ fn without_the_index_completion_offers_no_index_name() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A library folder holding one footprint named `name`, written here.
+fn one_footprint_library(dir: &Path, name: &str) -> PathBuf {
+    let libraries = dir.join(format!("late-{name}"));
+    let pretty = libraries.join("Late.pretty");
+    std::fs::create_dir_all(&pretty).expect("a place to write the library");
+    std::fs::write(
+        pretty.join(format!("{name}.kicad_mod")),
+        format!(
+            "(footprint \"{name}\"\n\t(layer \"F.Cu\")\n\t(attr smd)\n\
+             \t(pad \"1\" smd rect (at -0.5 0) (size 0.5 0.5) (layers \"F.Cu\" \"F.Paste\" \"F.Mask\"))\n\
+             \t(pad \"2\" smd rect (at 0.5 0) (size 0.5 0.5) (layers \"F.Cu\" \"F.Paste\" \"F.Mask\"))\n)\n"
+        ),
+    )
+    .expect("the footprint is written");
+    libraries
+}
+
+/// `cypcb library import` while the board is open in the editor: the next
+/// completion offers what was just imported. The names are kept between
+/// requests, and this is what says they are thrown away when the index moves.
+#[test]
+fn a_name_imported_while_the_board_is_open_is_offered_next_time() {
+    let dir = project("offers-after-import", true);
+    let before = offered_in(&dir);
+    assert!(
+        before
+            .iter()
+            .any(|label| label == "kicad::R_0603_1608Metric"),
+        "the index was read before the import: {before:?}"
+    );
+    assert!(
+        !before.iter().any(|label| label == "kicad::LATE_ARRIVAL"),
+        "{before:?}"
+    );
+
+    let libraries = one_footprint_library(&dir, "LATE_ARRIVAL");
+    let mut manager = LibraryManager::new(&dir.join("cypcb-library.db")).expect("the index opens");
+    manager.add_kicad_search_path(libraries.clone());
+    manager
+        .auto_import_folder(&libraries)
+        .expect("the late library imports");
+    drop(manager);
+
+    let after = offered_in(&dir);
+    assert!(
+        after.iter().any(|label| label == "kicad::LATE_ARRIVAL"),
+        "imported after the first request and not offered: {after:?}"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// An index nobody touched is read once: the second request gets the same
+/// names back without opening the database again.
+#[test]
+fn an_unchanged_index_is_read_once() {
+    let dir = project("read-once", true);
+    let board = dir.join("board.cypcb");
+    let first = cypcb_library::design::index_names_for(&board);
+    let second = cypcb_library::design::index_names_for(&board);
+    assert!(!first.is_empty(), "the fixture index holds names");
+    assert!(
+        std::sync::Arc::ptr_eq(&first, &second),
+        "the unchanged index was read a second time"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Two writes inside one clock tick of the file system leave the index with
+/// the modification time it had before. Set that time back by hand after an
+/// import and the imported name still has to be offered.
+#[test]
+fn an_import_that_keeps_the_old_modification_time_is_still_seen() {
+    let dir = project("same-tick", true);
+    let index = dir.join("cypcb-library.db");
+    let before = offered_in(&dir);
+    assert!(
+        !before.iter().any(|label| label == "kicad::SAME_TICK"),
+        "{before:?}"
+    );
+    let modified = std::fs::metadata(&index)
+        .and_then(|metadata| metadata.modified())
+        .expect("the index has a modification time");
+
+    let libraries = one_footprint_library(&dir, "SAME_TICK");
+    let mut manager = LibraryManager::new(&index).expect("the index opens");
+    manager.add_kicad_search_path(libraries.clone());
+    manager
+        .auto_import_folder(&libraries)
+        .expect("the late library imports");
+    drop(manager);
+    std::fs::File::options()
+        .write(true)
+        .open(&index)
+        .and_then(|file| file.set_modified(modified))
+        .expect("the modification time is set back");
+
+    let after = offered_in(&dir);
+    assert!(
+        after.iter().any(|label| label == "kicad::SAME_TICK"),
+        "the import kept the old modification time and was missed: {after:?}"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
