@@ -30,9 +30,10 @@ hover modules without the binary.
 | Request | Capability | What it gives |
 |---|---|---|
 | Hover | `hoverProvider` | The part, net, footprint, board, zone or trace under the cursor, with its value, its pins and the nets they reach |
-| Completion | `completionProvider` | Footprint names, net names, part names, property keys, layer names and top-level keywords. Trigger characters: `.`, space and `"` |
+| Completion | `completionProvider` | Footprint names, net names, part names, property keys, layer names and top-level keywords. Trigger characters: `.`, space and `"`. Footprint names are the built-ins, the design's own `footprint` blocks and every `source::name` in the nearest `cypcb-library.db`, written the way `cypcb library search` prints them |
 | Go to definition | `definitionProvider` | From a pin reference or a net name to where that part or net is declared, in the same file |
 | Document sync | `textDocumentSync` | Full text on open and on change, and the text again on save |
+| Position encoding | `positionEncoding` | What a column counts: `utf-8` when the client offers it in `general.positionEncodings`, otherwise `utf-16`, the protocol's default. Diagnostics, hover, completion and go to definition all convert through one function |
 
 Diagnostics are published on open, on change and on save, without being asked.
 They carry two sources:
@@ -98,4 +99,4 @@ cargo test -p cypcb-lsp
 cargo test -p cypcb-lsp --test the_manual_matches_the_server
 ```
 
-Last verified: 2026-08-08.
+Last verified: 2026-09-27.

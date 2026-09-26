@@ -44,7 +44,9 @@ fn manual() -> String {
 fn capabilities_in(section: &str) -> Vec<String> {
     let mut found: Vec<String> = Vec::new();
     for piece in section.split('`').skip(1).step_by(2) {
-        let is_capability = piece.ends_with("Provider") || piece == "textDocumentSync";
+        let is_capability = piece.ends_with("Provider")
+            || piece == "textDocumentSync"
+            || piece == "positionEncoding";
         if is_capability && !found.iter().any(|seen| seen == piece) {
             found.push(piece.to_string());
         }

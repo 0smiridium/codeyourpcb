@@ -1,5 +1,5 @@
 use crate::error::LibraryError;
-use crate::models::{Component, ComponentMetadata, LibraryInfo};
+use crate::models::{Component, ComponentId, ComponentMetadata, LibraryInfo};
 use rusqlite::{params, Connection};
 
 /// SQLite schema for library management with FTS5 full-text search
@@ -288,6 +288,22 @@ pub fn insert_components_batch(
 
     tx.commit()?;
     Ok(components.len())
+}
+
+/// Every component that carries a footprint, ordered by source and name.
+pub fn footprint_ids(conn: &Connection) -> Result<Vec<ComponentId>, LibraryError> {
+    let mut stmt = conn.prepare(
+        "SELECT source, name FROM components WHERE footprint_data IS NOT NULL ORDER BY source, name",
+    )?;
+    let ids = stmt
+        .query_map([], |row| {
+            Ok(ComponentId::new(
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+            ))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(ids)
 }
 
 /// Get a component by source and name

@@ -9,7 +9,8 @@
 
 use std::path::{Path, PathBuf};
 
-use cypcb_library::LibraryManager;
+use cypcb_library::{LibraryManager, SearchFilters};
+use cypcb_lsp::completion::completion_at_position;
 use cypcb_lsp::document::{DocumentState, Position};
 use cypcb_lsp::hover::hover_at_position;
 
@@ -111,6 +112,100 @@ fn without_the_index_the_same_design_is_refused() {
         doc.sync_errors
     );
     assert!(card_over_the_footprint(&doc).contains("(unknown)"));
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A design with a footprint of its own and a part whose footprint is being
+/// typed.
+const OFFERS: &str = r#"version 1
+
+board test {
+    size 30mm x 30mm
+    layers 2
+}
+
+footprint OWN_PAD {
+    pad 1 rect at 0mm, 0mm size 1mm x 0.5mm
+}
+
+component R1 resistor "kicad::R_0603_1608Metric" {
+    value "330"
+    at 15mm, 15mm
+}
+"#;
+
+/// The labels offered inside R1's footprint string of [`OFFERS`], written
+/// into `dir`.
+fn offered_in(dir: &Path) -> Vec<String> {
+    let path = dir.join("offers.cypcb");
+    std::fs::write(&path, OFFERS).expect("the board is written");
+    let mut doc = DocumentState::new(format!("file://{}", path.display()), OFFERS.to_string(), 1);
+    doc.parse();
+    doc.build_world();
+    let (line, text) = OFFERS
+        .lines()
+        .enumerate()
+        .find(|(_, line)| line.starts_with("component R1 "))
+        .expect("the board places R1");
+    let character = text.find('"').expect("the line names a footprint") as u32 + 1;
+    completion_at_position(
+        &doc,
+        &Position {
+            line: line as u32,
+            character,
+        },
+    )
+    .into_iter()
+    .map(|item| item.label)
+    .collect()
+}
+
+/// Inside a footprint string the editor offers the built-ins, the design's
+/// own `footprint` blocks, and every name the index holds - each written the
+/// way `cypcb library search` prints it, which is how a design has to write
+/// it.
+#[test]
+fn completion_offers_the_design_and_the_index_as_search_prints_them() {
+    let dir = project("offers", true);
+    let labels = offered_in(&dir);
+
+    assert!(labels.iter().any(|label| label == "0402"), "{labels:?}");
+    assert!(labels.iter().any(|label| label == "OWN_PAD"), "{labels:?}");
+
+    let manager = LibraryManager::new(&dir.join("cypcb-library.db")).expect("the index opens");
+    let mut printed = Vec::new();
+    for query in ["0603", "0402", "SOT"] {
+        for found in manager
+            .search(query, &SearchFilters::default())
+            .expect("the search runs")
+        {
+            printed.push(found.component.id.to_string());
+        }
+    }
+    assert_eq!(
+        printed.len(),
+        3,
+        "the fixture holds three footprints: {printed:?}"
+    );
+    for name in &printed {
+        assert!(labels.contains(name), "{name} is not offered: {labels:?}");
+    }
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The control: without the index nothing from it is offered.
+#[test]
+fn without_the_index_completion_offers_no_index_name() {
+    let dir = project("offers-absent", false);
+    let labels = offered_in(&dir);
+
+    assert!(labels.iter().any(|label| label == "OWN_PAD"), "{labels:?}");
+    assert!(
+        labels.iter().all(|label| !label.contains("::")),
+        "{labels:?}"
+    );
 
     let _ = std::fs::remove_dir_all(&dir);
 }

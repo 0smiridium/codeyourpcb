@@ -10,10 +10,38 @@ use cypcb_parser::{ImportError, ParseError};
 use cypcb_world::{BoardWorld, SyncError};
 
 /// Position in a document (LSP-style, 0-indexed).
+///
+/// `character` counts in the document's [`Encoding`], not in `char`s.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Position {
     pub line: u32,
     pub character: u32,
+}
+
+/// What a [`Position::character`] counts along a line.
+///
+/// LSP 3.17, `PositionEncodingKind.UTF16`: "Character offsets count UTF-16
+/// code units. This is the default and must always be supported by servers".
+/// The server counted `char`s and negotiated nothing, so on a line holding an
+/// emoji - one `char`, two UTF-16 units, four UTF-8 bytes - every column after
+/// it was off by one for the editor and by three for a client speaking UTF-8.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Encoding {
+    /// UTF-8 code units, i.e. bytes.
+    Utf8,
+    /// UTF-16 code units: the protocol's default.
+    #[default]
+    Utf16,
+}
+
+impl Encoding {
+    /// How many units of this encoding `ch` takes.
+    fn units(self, ch: char) -> u32 {
+        match self {
+            Encoding::Utf8 => ch.len_utf8() as u32,
+            Encoding::Utf16 => ch.len_utf16() as u32,
+        }
+    }
 }
 
 /// The filesystem path a document URI names, when it names one.
@@ -72,6 +100,11 @@ pub struct DocumentState {
     /// and was dropped - which is why a design split across files came up
     /// empty in the editor and checked fine on the command line.
     pub path: Option<PathBuf>,
+    /// What a position's `character` counts, as the client and server agreed
+    /// in `initialize`. Every position in and out goes through
+    /// [`DocumentState::offset_to_position`] and
+    /// [`DocumentState::position_to_offset`], which read it.
+    pub encoding: Encoding,
 }
 
 /// A `fab` name the tool does not have, and where it was written.
@@ -97,6 +130,7 @@ impl DocumentState {
             import_errors: Vec::new(),
             fab_fallback: None,
             path: path_of(&uri),
+            encoding: Encoding::default(),
         }
     }
 
@@ -189,7 +223,8 @@ impl DocumentState {
         sync_result.is_ok()
     }
 
-    /// Convert a byte offset to a Position.
+    /// Convert a byte offset to a Position, counting columns in
+    /// [`DocumentState::encoding`].
     pub fn offset_to_position(&self, offset: usize) -> Position {
         let mut line = 0u32;
         let mut col = 0u32;
@@ -203,7 +238,7 @@ impl DocumentState {
                 line += 1;
                 col = 0;
             } else {
-                col += 1;
+                col += self.encoding.units(ch);
             }
             current_offset += ch.len_utf8();
         }
@@ -214,30 +249,31 @@ impl DocumentState {
         }
     }
 
-    /// Convert a Position to a byte offset.
+    /// Convert a Position to a byte offset, reading its column in
+    /// [`DocumentState::encoding`].
+    ///
+    /// A column past the end of its line means the end of that line, as LSP
+    /// 3.17 says of `Position.character`. A column inside a character - the
+    /// second half of a surrogate pair, a byte in the middle of a UTF-8
+    /// sequence - means that character.
     pub fn position_to_offset(&self, position: &Position) -> Option<usize> {
         let mut current_line = 0u32;
         let mut current_col = 0u32;
         let mut offset = 0usize;
 
         for ch in self.content.chars() {
-            if current_line == position.line && current_col == position.character {
+            if current_line == position.line
+                && (ch == '\n' || current_col + self.encoding.units(ch) > position.character)
+            {
                 return Some(offset);
             }
             if ch == '\n' {
-                if current_line == position.line {
-                    return Some(offset);
-                }
                 current_line += 1;
                 current_col = 0;
             } else {
-                current_col += 1;
+                current_col += self.encoding.units(ch);
             }
             offset += ch.len_utf8();
-        }
-
-        if current_line == position.line && current_col == position.character {
-            return Some(offset);
         }
 
         if current_line == position.line {

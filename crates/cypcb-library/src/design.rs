@@ -94,3 +94,21 @@ fn collect(definitions: &[Definition], names: &mut BTreeSet<String>) {
         }
     }
 }
+
+/// Every name the index nearest `design` can resolve, written the way a
+/// design writes it and `cypcb library search` prints it: `source::name`.
+///
+/// Empty when there is no index or it cannot be read, as
+/// [`footprint_library_for`] is silent about both.
+pub fn index_names_for(design: &Path) -> Vec<String> {
+    let Some(index) = index_for(design) else {
+        return Vec::new();
+    };
+    let Ok(manager) = LibraryManager::new(&index) else {
+        return Vec::new();
+    };
+    manager
+        .footprint_ids()
+        .map(|ids| ids.iter().map(|id| id.to_string()).collect())
+        .unwrap_or_default()
+}
