@@ -133,53 +133,75 @@ mod tests {
         assert!(watcher.is_ok());
     }
 
+    /// How long a test waits for an event before it calls the event lost.
+    /// Only a failing test waits this long; a passing one returns at its event.
+    const EVENT_DEADLINE: Duration = Duration::from_secs(30);
+
+    /// Waits for the watcher to report `name`, and returns every event that
+    /// came before it. Panics when the deadline passes without it.
+    fn wait_for(watcher: &FileWatcher, name: &str) -> Vec<WatchEvent> {
+        let deadline = std::time::Instant::now() + EVENT_DEADLINE;
+        let mut before = Vec::new();
+        loop {
+            let left = deadline.saturating_duration_since(std::time::Instant::now());
+            match watcher.recv_timeout(left) {
+                Some(WatchEvent::Modified(path)) if path.ends_with(name) => return before,
+                Some(other) => before.push(other),
+                None => panic!("no event for {name} within {EVENT_DEADLINE:?}; saw {before:?}"),
+            }
+        }
+    }
+
     #[test]
     fn test_watcher_detects_change() {
         let temp = std::env::temp_dir().join(format!("cypcb_watcher_test-{}", std::process::id()));
-        let _ = fs::create_dir_all(&temp);
+        let _ = fs::remove_dir_all(&temp);
+        fs::create_dir_all(&temp).expect("Failed to create test dir");
 
         let watcher = FileWatcher::new(&temp).expect("Failed to create watcher");
 
-        // Create a test file
         let test_file = temp.join("test.cypcb");
         fs::write(&test_file, "version 1\n").expect("Failed to write test file");
 
-        // Wait for potential event (with timeout)
-        let event = watcher.recv_timeout(Duration::from_millis(500));
+        let before = wait_for(&watcher, "test.cypcb");
 
-        // Clean up
-        let _ = fs::remove_file(&test_file);
-        let _ = fs::remove_dir(&temp);
+        let _ = fs::remove_dir_all(&temp);
 
-        // Event may or may not arrive depending on OS timing
-        // The important thing is no panic
-        if let Some(WatchEvent::Modified(path)) = event {
-            assert!(path.ends_with("test.cypcb"));
-        }
+        assert!(
+            before.iter().all(|e| matches!(e, WatchEvent::Modified(_))),
+            "the watcher reported an error: {before:?}"
+        );
     }
 
     #[test]
     fn test_ignores_non_cypcb_files() {
         let temp =
             std::env::temp_dir().join(format!("cypcb_watcher_test_ignore-{}", std::process::id()));
-        let _ = fs::create_dir_all(&temp);
+        let _ = fs::remove_dir_all(&temp);
+        fs::create_dir_all(&temp).expect("Failed to create test dir");
 
         let watcher = FileWatcher::new(&temp).expect("Failed to create watcher");
 
-        // Create a non-.cypcb file
-        let test_file = temp.join("test.txt");
-        fs::write(&test_file, "hello\n").expect("Failed to write test file");
+        // The .txt file is written first. The .cypcb file after it is the
+        // control: once its event is in, the watcher has seen both writes, so
+        // silence about the .txt file is a finding and not a slow machine.
+        fs::write(temp.join("test.txt"), "hello\n").expect("Failed to write test file");
+        fs::write(temp.join("control.cypcb"), "version 1\n").expect("Failed to write control");
 
-        // Should not receive any event
-        let event = watcher.recv_timeout(Duration::from_millis(300));
+        let mut seen = wait_for(&watcher, "control.cypcb");
+        while let Some(event) = watcher.try_recv() {
+            seen.push(event);
+        }
 
-        // Clean up
-        let _ = fs::remove_file(&test_file);
-        let _ = fs::remove_dir(&temp);
+        let _ = fs::remove_dir_all(&temp);
 
+        let stray: Vec<_> = seen
+            .iter()
+            .filter(|e| !matches!(e, WatchEvent::Modified(p) if p.ends_with("control.cypcb")))
+            .collect();
         assert!(
-            event.is_none(),
-            "Should not receive events for non-.cypcb files"
+            stray.is_empty(),
+            "Should not receive events for non-.cypcb files: {stray:?}"
         );
     }
 }

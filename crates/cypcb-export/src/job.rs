@@ -742,10 +742,18 @@ mod tests {
             board_name: "test".to_string(),
         };
 
+        let started = std::time::Instant::now();
         let result = run_export(&job, &mut world, &library).unwrap();
+        let outside = started.elapsed().as_millis() as u64;
 
-        // Duration should be tracked (u64 is always >= 0, just verify it exists)
-        let _duration = result.duration_ms;
+        // The export times itself from inside the call, so its figure cannot
+        // be more than the call took. A figure in the wrong unit, microseconds
+        // for milliseconds, is a thousand times over.
+        assert!(
+            result.duration_ms <= outside,
+            "the export says it took {} ms inside a call that took {outside} ms",
+            result.duration_ms
+        );
 
         // Cleanup
         let _ = fs::remove_dir_all(temp_dir);
