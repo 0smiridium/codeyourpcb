@@ -1,5 +1,6 @@
 //! `cypcb check`, the language server and the browser's engine check a board
-//! against the same fab table, and find the same things.
+//! against the same fab table, and find the same things. `cypcb route` and
+//! `cypcb score` name the same table for it too.
 //!
 //! `cargo test -p cypcb-cli --test three_surfaces_check_against_one_table`
 //!
@@ -9,6 +10,11 @@
 //! `jlcpcb_standard_2layer` in both editors: a 0.11mm gap was clean on the
 //! command line and an error in the editor. The choice is one function now,
 //! `cypcb_drc::table_for`, and this is what holds the three to it.
+//!
+//! `route` and `score` went through the same function and printed no table,
+//! so nothing held them to it. Both name it now. `score` grades the board it
+//! is given, so its counts are held to `check`'s as well; `route` adds copper
+//! first, so only its table is.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -63,6 +69,49 @@ fn the_command(board: &Path) -> Verdict {
     }
 }
 
+/// The table `route` names in its DRC line, and the violations it counts.
+fn the_router(board: &Path) -> (String, usize) {
+    let routed = board.with_extension("routed.cypcb");
+    let output = Command::new(env!("CARGO_BIN_EXE_cypcb"))
+        .args(["route", "--in-house"])
+        .arg(board)
+        .arg("-o")
+        .arg(&routed)
+        .output()
+        .expect("the binary runs");
+    let said = String::from_utf8_lossy(&output.stderr).to_string();
+    let line = said
+        .lines()
+        .find_map(|line| line.strip_prefix("DRC on the routed board: "))
+        .unwrap_or_else(|| panic!("route printed no DRC line:\n{said}"));
+    let (count, rest) = line
+        .split_once(" violations against ")
+        .unwrap_or_else(|| panic!("route did not name its table: {line}"));
+    let table = rest.split(',').next().expect("a table name").to_string();
+    (table, count.parse().expect("a violation count"))
+}
+
+/// The table `score` names, its row count and its clearance contacts.
+fn the_scorer(board: &Path) -> (String, usize, usize) {
+    let output = Command::new(env!("CARGO_BIN_EXE_cypcb"))
+        .arg("score")
+        .arg(board)
+        .output()
+        .expect("the binary runs");
+    let said = String::from_utf8_lossy(&output.stdout).to_string();
+    let score: serde_json::Value =
+        serde_json::from_str(said.trim()).unwrap_or_else(|e| panic!("{e}: {said}"));
+    let number = |key: &str| score[key].as_u64().expect(key) as usize;
+    (
+        score["preset"]
+            .as_str()
+            .expect("the table it scored against")
+            .to_string(),
+        number("drc_violations"),
+        number("clearance_contacts"),
+    )
+}
+
 fn the_language_server(source: &str) -> Verdict {
     let mut doc = DocumentState::new("test://three-surfaces".into(), source.to_string(), 1);
     doc.parse();
@@ -103,6 +152,7 @@ fn the_engine(source: &str) -> Verdict {
 fn the_three_surfaces_check_one_board_against_one_table() {
     let dir = cypcb_fixtures::scratch_dir("cypcb-three-surfaces");
     let mut clearance_by_table: BTreeMap<String, usize> = BTreeMap::new();
+    let mut route_by_table: BTreeMap<String, usize> = BTreeMap::new();
 
     for layers in [2u8, 4] {
         for fab in [None, Some("jlcpcb"), Some("oshpark")] {
@@ -116,6 +166,24 @@ fn the_three_surfaces_check_one_board_against_one_table() {
             let case = format!("layers {layers}, fab {fab:?}");
             assert_eq!(server, command, "{case}: the server and `check` disagree");
             assert_eq!(engine, command, "{case}: the engine and `check` disagree");
+
+            let (scored_against, rows, contacts) = the_scorer(&board);
+            assert_eq!(
+                (scored_against.as_str(), rows, contacts),
+                (
+                    command.table.as_str(),
+                    command.counts.values().sum(),
+                    command.counts.get("clearance").copied().unwrap_or(0)
+                ),
+                "{case}: `score` and `check` disagree"
+            );
+
+            let (routed_against, routed_rows) = the_router(&board);
+            assert_eq!(
+                routed_against, command.table,
+                "{case}: `route` and `check` disagree"
+            );
+            route_by_table.insert(command.table.clone(), routed_rows);
 
             clearance_by_table.insert(
                 command.table.clone(),
@@ -137,4 +205,10 @@ fn the_three_surfaces_check_one_board_against_one_table() {
         "{clearance_by_table:?}"
     );
     assert_eq!(clearance_by_table.len(), 4, "{clearance_by_table:?}");
+    // The same control for `route`, whose table is only named: the routed
+    // board keeps the 0.11mm gap, so the count moves with the table.
+    assert!(
+        route_by_table.get("jlcpcb_standard_2layer") > route_by_table.get("jlcpcb_standard_4layer"),
+        "{route_by_table:?}"
+    );
 }
