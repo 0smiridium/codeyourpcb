@@ -15,6 +15,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use cypcb_fixtures::tree::{tracked_in, written_entries};
 use cypcb_world::footprint::FootprintLibrary;
 use cypcb_world::{sync_ast_to_world, BoardWorld};
 
@@ -162,9 +163,8 @@ fn a_value_that_is_not_a_quantity_stays_a_string() {
 fn every_example_survives_a_save() {
     let dir = cypcb_fixtures::scratch_dir("cypcb-save-every-example");
 
-    let mut files: Vec<PathBuf> = std::fs::read_dir(repo_root().join("examples"))
-        .expect("the examples are there")
-        .filter_map(|entry| entry.ok().map(|e| e.path()))
+    let mut files: Vec<PathBuf> = tracked_in(repo_root().join("examples"))
+        .into_iter()
         .filter(|path| path.extension().is_some_and(|ext| ext == "cypcb"))
         .collect();
     files.sort();
@@ -278,7 +278,7 @@ fn silk_gerber(board: &Path, into: &Path) -> String {
         "exporting failed:\n{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let gerber = std::fs::read_dir(into.join("gerber"))
+    let gerber = written_entries(into.join("gerber"))
         .expect("the gerbers are there")
         .filter_map(|entry| entry.ok().map(|e| e.path()))
         .find(|path| path.to_string_lossy().contains("F_SilkS"))
@@ -357,7 +357,7 @@ fn bom(board: &Path, into: &Path) -> String {
         "exporting failed:\n{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let csv = std::fs::read_dir(into.join("assembly"))
+    let csv = written_entries(into.join("assembly"))
         .expect("the assembly files are there")
         .filter_map(|entry| entry.ok().map(|e| e.path()))
         .find(|path| path.to_string_lossy().ends_with("BOM.csv"))
@@ -411,7 +411,7 @@ fn exported(board: &Path, into: &Path, ends_with: &str) -> String {
     );
     let mut stack = vec![into.to_path_buf()];
     while let Some(dir) = stack.pop() {
-        for entry in std::fs::read_dir(&dir)
+        for entry in written_entries(&dir)
             .expect("the export directory is there")
             .flatten()
         {
@@ -526,7 +526,7 @@ fn two_exports_of_one_board_are_the_same_bytes() {
     let mut compared = 0;
     let mut stack = vec![first.clone()];
     while let Some(dir) = stack.pop() {
-        for entry in std::fs::read_dir(&dir)
+        for entry in written_entries(&dir)
             .expect("the export directory is there")
             .flatten()
         {

@@ -94,8 +94,7 @@ fn millimetres_of(value: i64) -> String {
 fn a_footprint_block_states_the_numbers_it_is_built_with() {
     let dir = footprint_dir();
     let mut sources: Vec<(String, String)> = Vec::new();
-    for entry in std::fs::read_dir(&dir).expect("the footprint directory is there") {
-        let path = entry.expect("a directory entry").path();
+    for path in cypcb_fixtures::tree::tracked_in(&dir) {
         if path.extension().and_then(|e| e.to_str()) != Some("rs") {
             continue;
         }

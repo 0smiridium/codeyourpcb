@@ -44,8 +44,7 @@ fn names_after(haystack: &str, marker: &str) -> Vec<String> {
 fn rules_written() -> Vec<String> {
     let dir = crate_root().join("src/rules");
     let mut names = Vec::new();
-    for entry in fs::read_dir(&dir).expect("the rules directory is readable") {
-        let path = entry.expect("a directory entry").path();
+    for path in cypcb_fixtures::tree::tracked_in(&dir) {
         if path.extension().and_then(|e| e.to_str()) != Some("rs") {
             continue;
         }

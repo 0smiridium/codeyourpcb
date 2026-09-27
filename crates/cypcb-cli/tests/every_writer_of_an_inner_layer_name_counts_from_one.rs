@@ -14,6 +14,7 @@
 
 use std::path::{Path, PathBuf};
 
+use cypcb_fixtures::tree::{tracked_dirs_in, tracked_under};
 use cypcb_world::Layer;
 
 /// Sites turning the enum into the name, today 4.
@@ -28,17 +29,11 @@ fn repo_root() -> PathBuf {
 }
 
 fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            rust_files(&path, out);
-        } else if path.extension().is_some_and(|e| e == "rs") {
-            out.push(path);
-        }
-    }
+    out.extend(
+        tracked_under(dir)
+            .into_iter()
+            .filter(|path| path.extension().is_some_and(|e| e == "rs")),
+    );
 }
 
 #[test]
@@ -50,11 +45,8 @@ fn every_writer_of_an_inner_layer_name_counts_from_one() {
 
     let root = repo_root();
     let mut files = Vec::new();
-    for entry in std::fs::read_dir(root.join("crates")).expect("the crates directory is there") {
-        let src = entry.expect("a readable entry").path().join("src");
-        if src.is_dir() {
-            rust_files(&src, &mut files);
-        }
+    for krate in tracked_dirs_in(root.join("crates")) {
+        rust_files(&krate.join("src"), &mut files);
     }
     files.sort();
 

@@ -83,16 +83,6 @@ fn k010_names_the_cases_that_hold_it() {
     }
 }
 
-fn tracked_by_git(path: &Path) -> bool {
-    std::process::Command::new("git")
-        .arg("ls-files")
-        .arg("--error-unmatch")
-        .arg(path)
-        .current_dir(repo_root())
-        .output()
-        .is_ok_and(|out| out.status.success())
-}
-
 #[test]
 fn every_path_the_knowledge_base_names_exists() {
     // K014 told the next reader to look for `checkSilkClearance()` in
@@ -104,9 +94,8 @@ fn every_path_the_knowledge_base_names_exists() {
     // named `src/variant-panel.ts` for a month after the panel was deleted, and
     // `tests/abandoned_connections.rs` from a directory it is not in.
     let mut documents = String::new();
-    for entry in std::fs::read_dir(repo_root().join(".gsd")).expect(".gsd is readable") {
-        let path = entry.expect("a readable entry").path();
-        if path.extension().is_some_and(|ext| ext == "md") && tracked_by_git(&path) {
+    for path in cypcb_fixtures::tree::tracked_in(repo_root().join(".gsd")) {
+        if path.extension().is_some_and(|ext| ext == "md") {
             documents.push_str(&std::fs::read_to_string(&path).unwrap_or_default());
         }
     }

@@ -72,32 +72,23 @@ const ALLOWED: &[(&str, usize, &str)] = &[
 ];
 
 fn crates_dir() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("..")
+    cypcb_fixtures::tree::repo_root().join("crates")
 }
 
 fn rust_files(dir: &Path, found: &mut Vec<PathBuf>) {
-    for entry in std::fs::read_dir(dir)
-        .expect("a source directory reads")
-        .flatten()
-    {
-        let path = entry.path();
-        if path.is_dir() {
-            rust_files(&path, found);
-        } else if path.extension().is_some_and(|e| e == "rs") {
-            found.push(path);
-        }
-    }
+    found.extend(
+        cypcb_fixtures::tree::tracked_under(dir)
+            .into_iter()
+            .filter(|path| path.extension().is_some_and(|e| e == "rs")),
+    );
 }
 
 /// `sin`/`cos` calls per file under every crate's `src`.
 fn trigonometry() -> BTreeMap<String, usize> {
     let root = crates_dir();
     let mut counts = BTreeMap::new();
-    for krate in std::fs::read_dir(&root).expect("crates/ reads").flatten() {
-        let src = krate.path().join("src");
-        if !src.is_dir() {
-            continue;
-        }
+    for krate in cypcb_fixtures::tree::tracked_dirs_in(&root) {
+        let src = krate.join("src");
         let mut files = Vec::new();
         rust_files(&src, &mut files);
         for file in files {

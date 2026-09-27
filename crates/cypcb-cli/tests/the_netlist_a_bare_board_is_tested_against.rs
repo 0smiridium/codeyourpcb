@@ -44,7 +44,7 @@ fn netlist(board: &Path, out: &Path) -> String {
     assert!(status.success(), "the export failed");
 
     let dir = out.join("netlist");
-    let file = std::fs::read_dir(&dir)
+    let file = cypcb_fixtures::tree::written_entries(&dir)
         .expect("the netlist directory exists")
         .map(|entry| entry.expect("a directory entry").path())
         .find(|path| {

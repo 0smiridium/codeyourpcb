@@ -18,6 +18,8 @@
 
 use std::path::{Path, PathBuf};
 
+use cypcb_fixtures::tree::tracked_under;
+
 /// Constants of this type found by the walk, today 16.
 const CONSTANTS_EXAMINED_FLOOR: usize = 15;
 
@@ -32,18 +34,19 @@ fn repo_root() -> PathBuf {
         .to_path_buf()
 }
 
-fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            rust_files(&path, out);
-        } else if path.extension().is_some_and(|e| e == "rs") {
-            out.push(path);
-        }
-    }
+/// Every `.rs` file git tracks under `crates/*/src`.
+fn rust_files() -> Vec<PathBuf> {
+    let crates = repo_root().join("crates");
+    tracked_under(&crates)
+        .into_iter()
+        .filter(|path| {
+            path.strip_prefix(&crates)
+                .ok()
+                .and_then(|inside| inside.components().nth(1))
+                .is_some_and(|part| part.as_os_str() == "src")
+        })
+        .filter(|path| path.extension().is_some_and(|e| e == "rs"))
+        .collect()
 }
 
 /// The millimetre value a constant is declared with, for the two ways this
@@ -120,13 +123,7 @@ fn figures_in_mm(prose: &str) -> Vec<f64> {
 #[test]
 fn a_constant_agrees_with_the_figure_stated_above_it() {
     let root = repo_root();
-    let mut files = Vec::new();
-    for entry in std::fs::read_dir(root.join("crates")).expect("the crates directory is there") {
-        let src = entry.expect("a readable entry").path().join("src");
-        if src.is_dir() {
-            rust_files(&src, &mut files);
-        }
-    }
+    let mut files = rust_files();
     files.sort();
     assert!(
         files.len() > 100,

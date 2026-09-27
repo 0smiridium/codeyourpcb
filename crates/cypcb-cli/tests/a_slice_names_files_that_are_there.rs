@@ -19,6 +19,8 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
+use cypcb_fixtures::tree::tracked_under;
+
 fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -29,25 +31,14 @@ fn repo_root() -> PathBuf {
 
 /// Every slice summary in the repository, in a fixed order.
 fn summaries(root: &Path) -> Vec<PathBuf> {
-    let mut found = Vec::new();
-    let mut stack = vec![root.join(".gsd").join("milestones")];
-    while let Some(at) = stack.pop() {
-        let Ok(entries) = std::fs::read_dir(&at) else {
-            continue;
-        };
-        for entry in entries {
-            let path = entry.expect("a directory entry").path();
-            if path.is_dir() {
-                stack.push(path);
-            } else if path
-                .file_name()
+    let mut found: Vec<PathBuf> = tracked_under(root.join(".gsd").join("milestones"))
+        .into_iter()
+        .filter(|path| {
+            path.file_name()
                 .and_then(|n| n.to_str())
                 .is_some_and(|n| n.ends_with("-SUMMARY.md"))
-            {
-                found.push(path);
-            }
-        }
-    }
+        })
+        .collect();
     found.sort();
     found
 }

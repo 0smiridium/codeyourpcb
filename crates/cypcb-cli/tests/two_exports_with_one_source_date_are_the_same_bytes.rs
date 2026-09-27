@@ -30,9 +30,8 @@ fn repo_root() -> PathBuf {
 /// Every board in the benchmark directory.
 fn benchmark_boards() -> Vec<PathBuf> {
     let dir = repo_root().join("tests/fixtures/benchmark");
-    let mut boards: Vec<PathBuf> = std::fs::read_dir(&dir)
-        .expect("the benchmark directory is there")
-        .map(|entry| entry.expect("a directory entry").path())
+    let mut boards: Vec<PathBuf> = cypcb_fixtures::tree::tracked_in(&dir)
+        .into_iter()
         .filter(|path| {
             path.extension()
                 .is_some_and(|ext| ext == "cypcb" || ext == "kicad_pcb")
@@ -77,7 +76,7 @@ fn files_under(dir: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
     let mut found = BTreeMap::new();
     let mut stack = vec![dir.to_path_buf()];
     while let Some(at) = stack.pop() {
-        let Ok(entries) = std::fs::read_dir(&at) else {
+        let Ok(entries) = cypcb_fixtures::tree::written_entries(&at) else {
             continue;
         };
         for entry in entries {

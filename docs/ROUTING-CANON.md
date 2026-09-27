@@ -500,14 +500,15 @@ crates/cypcb-drc/src/rules/pad_entry.rs` answers 31: 29 at `4ff318c`, 30 with th
 **The teardrop condition has no check, and measuring it on 2026-09-12 found
 three reasons that go deeper than "nobody wrote the rule".**
 
-First, nothing declares one. `ls examples/*.cypcb | wc -l` gives 33 and
-`grep -l teardrop examples/*.cypcb | wc -l` gives 1, and that one is
+First, nothing declares one. `git ls-files ':(glob)examples/*.cypcb' | wc -l`
+gives 33 and `git grep -l teardrop -- ':(glob)examples/*.cypcb' | wc -l` gives 1,
+and that one is
 `examples/teardrops.cypcb`, the file that exists to document the property. A
 rule reading `world.teardrops()` would find it unset on 32 boards out of 33.
 
 Second, no rule could read the copper even if it were drawn, because the copper
 is not in the board. Every mention of a teardrop in the DRC crate is a
-comment - `grep -rn teardrop crates/cypcb-drc/src/` finds no code, only prose,
+comment - `git grep -n teardrop -- crates/cypcb-drc/src/` finds no code, only prose,
 and a count would rot the next time somebody writes the word. The fillet is synthesised at export time by
 `export_teardrops` in `crates/cypcb-export/src/gerber/copper.rs`, from the
 ratios and the pad geometry; the world the checker walks holds pads, traces and
@@ -1163,7 +1164,7 @@ start_layer, end_layer, net_id, locked }`
 (`crates/cypcb-world/src/components/trace.rs:727-742`) - so the distance from a
 signal via to the nearest reference-net via spanning the same layer pair is a
 query over data already in the world. Nothing computes it today, and no rule in
-`crates/cypcb-drc` asks for it: `grep -rln stitch crates/cypcb-drc/src/`
+`crates/cypcb-drc` asks for it: `git grep -ln stitch -- crates/cypcb-drc/src/`
 returns nothing at all.
 
 **4. Unlike R-13, this is not a four-layer rule.** R-13's strict form fails on
@@ -1272,8 +1273,8 @@ components too.
 - *Surviving spoke count:* the arm mapping R-09 specifies, on the same filled
   pour. `thermal_spokes` (`crates/cypcb-core/src/pour.rs:272`) cuts a fixed
   cross of four whatever any table says, and `thermal_relief_spokes` still has
-  zero readers outside its own crate - `grep -rln thermal_relief_spokes
-  --include=*.rs crates/ | grep -v cypcb-rules | wc -l` returns `0`. So the
+  zero readers outside its own crate - `git grep -ln thermal_relief_spokes
+  -- 'crates/*.rs' | grep -v cypcb-rules | wc -l` returns `0`. So the
   count that matters is the one that survives clipping, not the one declared.
   See "Declared is not measured". Checkable today.
 - *Symmetry across a component's pads:* the pads, their nets and their
@@ -2354,7 +2355,7 @@ will.
 it used, and that strength has a number now.** Six quantities this project does
 measure were searched for on 2026-09-14 by the phrase a reader of this canon
 would write, and set beside the name the code uses. One command, one scope -
-`grep -ril "<term>" --include=*.rs crates/` over the tracked `.rs` files in the
+`git grep -il "<term>" -- 'crates/*.rs'` over the tracked `.rs` files in the
 crates, tests included, because the question is whether this project measures
 the quantity and a test measures it too. **The count of those files is
 deliberately not stated here**: it moved the first time somebody added a test
@@ -2641,8 +2642,9 @@ lattice moved under the pads. 773 are off it; the reading does not change.
 The second reading is not refuted here but ruled out of court: **not one part on
 any of the six boards is turned.** Of the 174 footprints in the fixtures, two
 placements carry a rotation field at all and both of them read zero - counted with
-`grep -h "^  (footprint " tests/fixtures/benchmark/*.kicad_pcb | wc -l` for the 174
-and `grep -hE "^\s*\(at [-0-9.]+ [-0-9.]+ [-0-9.]+\)" tests/fixtures/benchmark/*.kicad_pcb`
+`git grep -h "^  (footprint " -- ':(glob)tests/fixtures/benchmark/*.kicad_pcb' | wc -l`
+for the 174 and
+`git grep -hE "^\s*\(at [-0-9.]+ [-0-9.]+ [-0-9.]+\)" -- ':(glob)tests/fixtures/benchmark/*.kicad_pcb'`
 for the two, the second printing the rotations rather than counting them. Both read
 `tests/fixtures/benchmark`, which is outside the code under test because the
 test's own rotation figure cannot tell a correct reader from one that always
@@ -2833,8 +2835,9 @@ written.
 - **Its denominator is that pair set, and it is small enough to publish
   exactly.** How many designs declare the property, and how many paths claim to
   carry it. That pair is counted rather than remembered -
-  `grep -rln teardrops examples/*.cypcb | wc -l` against
-  `ls examples/*.cypcb | wc -l`, which is the pair a reader re-runs - and what
+  `git grep -ln teardrops -- ':(glob)examples/*.cypcb' | wc -l` against
+  `git ls-files ':(glob)examples/*.cypcb' | wc -l`, which is the pair a reader
+  re-runs - and what
   is worth pinning is not either number but that the declaring population is
   not empty, because a design-side check with no design to fire on has quietly
   lost its subject. A run that reports
@@ -2990,19 +2993,19 @@ for f in min_acid_trap max_stub_length thermal_relief_spokes \
          max_vias_per_high_speed_net diff_pair_gap diff_pair_tolerance \
          max_copper_layers max_current_per_width_x100; do
   printf '%s: ' "$f"
-  grep -rln "$f" --include=*.rs crates/ | grep -v '^crates/cypcb-rules/' | wc -l
+  git grep -ln "$f" -- 'crates/*.rs' | grep -v '^crates/cypcb-rules/' | wc -l
 done
 
 # Control for the grep above: these two do have readers
-grep -rln "min_hole_to_hole\|min_annular_ring" --include=*.rs crates/ \
+git grep -ln "min_hole_to_hole\|min_annular_ring" -- 'crates/*.rs' \
   | grep -v '^crates/cypcb-rules/'
 
 # The voltage table and its callers
-grep -rn "voltage_clearance\|clearance_table" --include=*.rs crates/
+git grep -n "voltage_clearance\|clearance_table" -- 'crates/*.rs'
 
 # Two sources of truth for thermal relief
 grep -n "thermal_gap\|spoke_width" crates/cypcb-core/src/pour.rs
-grep -rn "thermal_relief" crates/cypcb-rules/src/presets/
+git grep -n "thermal_relief" -- crates/cypcb-rules/src/presets/
 
 # The gate these numbers are held to
 cargo test -p cypcb-autoroute --test benchmark_validation
@@ -3099,14 +3102,14 @@ sed -n '44,60p' crates/cypcb-world/src/stitch.rs
 sed -n '32,42p' crates/cypcb-world/src/stitch.rs
 
 # R-14: nothing in the checker asks about any of it
-grep -rln stitch crates/cypcb-drc/src/ | wc -l          # expect 0
+git grep -ln stitch -- crates/cypcb-drc/src/ | wc -l   # expect 0
 
 # R-15: the two relief numbers the export path carries
 sed -n '244,249p' crates/cypcb-core/src/pour.rs
 
 # R-15: the spoke count is a fixed cross, and the constant has no reader
 grep -n "fn thermal_spokes" crates/cypcb-core/src/pour.rs
-grep -rln thermal_relief_spokes --include=*.rs crates/ \
+git grep -ln thermal_relief_spokes -- 'crates/*.rs' \
   | grep -v cypcb-rules | wc -l                         # expect 0
 
 # R-15: the data a symmetry check would walk already has a rule walking it
@@ -3119,19 +3122,19 @@ sed -n '162,180p;195,202p' crates/cypcb-drc/src/rules/clearance.rs
 sed -n '419,427p' crates/cypcb-rules/src/presets/mod.rs
 
 # R-19: every fab preset sources its figure; the IPC ones say they cannot
-grep -n "min_clearance" crates/cypcb-rules/src/presets/*.rs
+git grep -n "min_clearance" -- ':(glob)crates/cypcb-rules/src/presets/*.rs'
 
 # R-19: the rule that fires most is the first one the registry runs
 sed -n '136p' crates/cypcb-drc/src/lib.rs
 
 # A rule with no subject: what the fixtures actually carry
-for f in tests/fixtures/benchmark/*.kicad_pcb; do
+for f in $(git ls-files ':(glob)tests/fixtures/benchmark/*.kicad_pcb'); do
   printf '%-30s pads=%-4s zones=%s\n' "$(basename "$f")" \
     "$(grep -c '(pad ' "$f")" "$(grep -c '^  (zone' "$f")"
 done
 
 # and why no net on them declares anything: constraints arrive by project file
-ls tests/fixtures/benchmark/*.kicad_pro 2>/dev/null | wc -l   # expect 0
+git ls-files ':(glob)tests/fixtures/benchmark/*.kicad_pro' | wc -l   # expect 0
 
 # Constants a fab preset promises and nothing checks: every field a preset can
 # state, and how many files outside its own crate read it. The zero block is the
@@ -3141,7 +3144,7 @@ awk '/pub struct DesignConstraints/,/^}/' crates/cypcb-rules/src/constraints.rs 
   | grep -oE '^    pub [a-z0-9_]+' | awk '{print $2}' \
   | while read -r field; do
       printf '%s %s\n' \
-        "$(grep -rln "$field" --include=*.rs crates/ | grep -cv '^crates/cypcb-rules/')" \
+        "$(git grep -ln "$field" -- 'crates/*.rs' | grep -cv '^crates/cypcb-rules/')" \
         "$field"
     done | sort -n
 
@@ -3152,7 +3155,7 @@ cargo test --release -p cypcb-autoroute --test benchmark_validation benchmark_al
 cargo test --release -p cypcb-autoroute --test sharp_entry_anatomy -- --ignored --nocapture
 
 # no part on any fixture is turned: two placements carry a rotation, both zero
-grep -hE "^\s*\(at [-0-9.]+ [-0-9.]+ [-0-9.]+\)" tests/fixtures/benchmark/*.kicad_pcb
+git grep -hE "^\s*\(at [-0-9.]+ [-0-9.]+ [-0-9.]+\)" -- ':(glob)tests/fixtures/benchmark/*.kicad_pcb'
 
 # How many rules this canon has. A heading whose own title says it moved out is
 # a tombstone; the number of rules is headings minus tombstones, and every count

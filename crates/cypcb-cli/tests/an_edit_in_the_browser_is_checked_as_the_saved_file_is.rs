@@ -15,6 +15,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use cypcb_fixtures::tree::tracked_in;
 use cypcb_render::PcbEngine;
 
 fn repo_root() -> PathBuf {
@@ -26,9 +27,8 @@ fn repo_root() -> PathBuf {
 }
 
 fn benchmark_boards() -> Vec<PathBuf> {
-    let mut boards: Vec<PathBuf> = std::fs::read_dir(repo_root().join("tests/fixtures/benchmark"))
-        .expect("the benchmark boards are there")
-        .filter_map(|entry| entry.ok().map(|e| e.path()))
+    let mut boards: Vec<PathBuf> = tracked_in(repo_root().join("tests/fixtures/benchmark"))
+        .into_iter()
         .filter(|path| {
             path.extension()
                 .is_some_and(|ext| ext == "cypcb" || ext == "kicad_pcb")

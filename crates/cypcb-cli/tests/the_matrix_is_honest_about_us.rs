@@ -323,19 +323,10 @@ fn the_three_d_rows_say_what_the_renderer_and_the_engine_do() {
 /// Every `.ts` file under a directory, read.
 fn walk(dir: &Path) -> Vec<String> {
     let mut sources = Vec::new();
-    let mut stack = vec![dir.to_path_buf()];
-    while let Some(next) = stack.pop() {
-        let Ok(entries) = std::fs::read_dir(&next) else {
-            continue;
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                stack.push(path);
-            } else if path.extension().is_some_and(|ext| ext == "ts") {
-                if let Ok(text) = std::fs::read_to_string(&path) {
-                    sources.push(text);
-                }
+    for path in cypcb_fixtures::tree::tracked_under(dir) {
+        if path.extension().is_some_and(|ext| ext == "ts") {
+            if let Ok(text) = std::fs::read_to_string(&path) {
+                sources.push(text);
             }
         }
     }

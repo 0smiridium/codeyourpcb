@@ -237,7 +237,7 @@ fn what_the_router_lays_is_what_the_fabricator_gets() {
 
 fn walk(dir: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
-    let Ok(entries) = std::fs::read_dir(dir) else {
+    let Ok(entries) = cypcb_fixtures::tree::written_entries(dir) else {
         return out;
     };
     for entry in entries.flatten() {

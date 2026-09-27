@@ -34,12 +34,9 @@ fn no_example_ships_a_failing_assertion() {
     let mut asserted = 0usize;
     let mut broken: Vec<String> = Vec::new();
 
-    let mut entries: Vec<PathBuf> = std::fs::read_dir(examples())
-        .expect("the examples directory is there")
-        .filter_map(|entry| {
-            let path = entry.ok()?.path();
-            (path.extension()? == "cypcb").then_some(path)
-        })
+    let mut entries: Vec<PathBuf> = cypcb_fixtures::tree::tracked_in(examples())
+        .into_iter()
+        .filter(|path| path.extension().is_some_and(|ext| ext == "cypcb"))
         .collect();
     entries.sort();
     assert!(!entries.is_empty(), "no examples were found at all");

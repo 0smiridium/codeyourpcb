@@ -67,7 +67,9 @@ fn hashes_under(dir: &Path) -> BTreeMap<String, u64> {
     let mut found = BTreeMap::new();
     let mut stack = vec![dir.to_path_buf()];
     while let Some(at) = stack.pop() {
-        for entry in std::fs::read_dir(&at).expect("the output directory is readable") {
+        for entry in
+            cypcb_fixtures::tree::written_entries(&at).expect("the output directory is readable")
+        {
             let path = entry.expect("a directory entry").path();
             if path.is_dir() {
                 stack.push(path);

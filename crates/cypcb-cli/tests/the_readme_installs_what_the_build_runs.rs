@@ -80,9 +80,8 @@ fn words_scripts_run(text: &str) -> BTreeSet<String> {
 fn scripts() -> String {
     let mut text = read("viewer/build-wasm.sh");
     let dir = repo_root().join("scripts");
-    let mut paths: Vec<PathBuf> = std::fs::read_dir(dir)
-        .expect("the scripts directory is at the workspace root")
-        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+    let mut paths: Vec<PathBuf> = cypcb_fixtures::tree::tracked_in(dir)
+        .into_iter()
         .filter(|path| path.extension().is_some_and(|kind| kind == "sh"))
         .collect();
     paths.sort();

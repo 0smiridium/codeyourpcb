@@ -46,7 +46,7 @@ fn plot(board: &Path, out: &Path, suffix: &str) -> String {
     assert!(status.success(), "the export failed");
 
     let dir = out.join("plot");
-    let file = std::fs::read_dir(&dir)
+    let file = cypcb_fixtures::tree::written_entries(&dir)
         .expect("the plot directory exists")
         .map(|entry| entry.expect("a directory entry").path())
         .find(|path| {

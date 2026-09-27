@@ -40,7 +40,7 @@ fn top_silk(source: &str, who: &str) -> String {
     assert!(status.success(), "the export failed");
 
     let gerber = out.join("gerber");
-    let file = std::fs::read_dir(&gerber)
+    let file = cypcb_fixtures::tree::written_entries(&gerber)
         .expect("the gerber directory exists")
         .map(|entry| entry.expect("a directory entry").path())
         .find(|path| {

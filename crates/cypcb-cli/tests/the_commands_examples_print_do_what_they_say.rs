@@ -44,9 +44,8 @@ fn examples() -> Vec<Example> {
     let dir = repo_root().join("examples");
     let mut found = Vec::new();
 
-    let mut entries: Vec<PathBuf> = std::fs::read_dir(&dir)
-        .expect("the examples are where they have always been")
-        .filter_map(|entry| entry.ok().map(|e| e.path()))
+    let mut entries: Vec<PathBuf> = cypcb_fixtures::tree::tracked_in(&dir)
+        .into_iter()
         .filter(|path| path.extension().is_some_and(|ext| ext == "cypcb"))
         .collect();
     entries.sort();

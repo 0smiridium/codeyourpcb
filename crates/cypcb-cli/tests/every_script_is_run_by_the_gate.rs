@@ -11,6 +11,8 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
+use cypcb_fixtures::tree::tracked_in;
+
 fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -51,8 +53,7 @@ fn every_script_is_run_by_the_gate() {
         .join("\n");
 
     let mut scripts: Vec<String> = Vec::new();
-    for entry in std::fs::read_dir(root.join("scripts")).expect("the scripts are there") {
-        let path = entry.expect("a script").path();
+    for path in tracked_in(root.join("scripts")) {
         if path.extension().is_some_and(|e| e == "sh") {
             if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
                 scripts.push(name.to_string());

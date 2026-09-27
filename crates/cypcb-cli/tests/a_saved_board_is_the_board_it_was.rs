@@ -18,6 +18,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use cypcb_fixtures::tree::tracked_in;
 use cypcb_world::components::trace::{Trace, TraceSource, Via};
 use cypcb_world::components::zone::Zone;
 use cypcb_world::components::{
@@ -36,8 +37,7 @@ fn repo_root() -> PathBuf {
 fn boards() -> Vec<PathBuf> {
     let mut out = Vec::new();
     for dir in ["tests/fixtures/benchmark", "examples"] {
-        for entry in std::fs::read_dir(repo_root().join(dir)).expect("the directory") {
-            let path = entry.expect("an entry").path();
+        for path in tracked_in(repo_root().join(dir)) {
             let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
             if ext == "cypcb" || ext == "kicad_pcb" {
                 out.push(path);

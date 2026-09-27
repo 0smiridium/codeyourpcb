@@ -108,8 +108,7 @@ fn every_example_loads_in_a_blink() {
     // those files over with the board. Timing a board without them times a
     // board that stopped loading at its first import.
     let mut files = std::collections::BTreeMap::new();
-    for entry in std::fs::read_dir(dir.join("lib")).expect("the example library is there") {
-        let path = entry.expect("a directory entry").path();
+    for path in cypcb_fixtures::tree::tracked_in(dir.join("lib")) {
         let name = path.file_name().unwrap_or_default().to_string_lossy();
         let text = std::fs::read_to_string(&path).expect("the library file is readable");
         files.insert(format!("lib/{name}"), text);
@@ -118,8 +117,7 @@ fn every_example_loads_in_a_blink() {
 
     let mut slowest = (String::new(), 0u128);
     let mut checked = 0;
-    for entry in std::fs::read_dir(&dir).expect("the examples are there") {
-        let path = entry.expect("a directory entry").path();
+    for path in cypcb_fixtures::tree::tracked_in(&dir) {
         if path.extension().is_none_or(|ext| ext != "cypcb") {
             continue;
         }

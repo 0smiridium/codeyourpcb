@@ -19,21 +19,15 @@ use std::path::{Path, PathBuf};
 const ALLOWED: &[(&str, usize, &str)] = &[("cypcb-world/src/world.rs", 1, "in_build_order itself")];
 
 fn crates_dir() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("..")
+    cypcb_fixtures::tree::repo_root().join("crates")
 }
 
 fn rust_files(dir: &Path, found: &mut Vec<PathBuf>) {
-    for entry in std::fs::read_dir(dir)
-        .expect("a source directory reads")
-        .flatten()
-    {
-        let path = entry.path();
-        if path.is_dir() {
-            rust_files(&path, found);
-        } else if path.extension().is_some_and(|e| e == "rs") {
-            found.push(path);
-        }
-    }
+    found.extend(
+        cypcb_fixtures::tree::tracked_under(dir)
+            .into_iter()
+            .filter(|path| path.extension().is_some_and(|e| e == "rs")),
+    );
 }
 
 /// Queries per file, in the code a build ships: a file's test module is

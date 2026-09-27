@@ -14,7 +14,6 @@
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -25,20 +24,8 @@ fn repo_root() -> PathBuf {
 
 /// Everything git is tracking, asked once.
 fn tracked() -> HashSet<String> {
-    let output = Command::new("git")
-        .args(["ls-files", "-z"])
-        .current_dir(repo_root())
-        .output()
-        .expect("git ls-files: the suite runs from a checkout, so git must answer");
-    assert!(
-        output.status.success(),
-        "git ls-files failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    String::from_utf8_lossy(&output.stdout)
-        .split('\0')
-        .filter(|entry| !entry.is_empty())
-        .map(str::to_owned)
+    cypcb_fixtures::tree::files_git_tracks(&repo_root())
+        .into_iter()
         .collect()
 }
 
@@ -84,53 +71,41 @@ fn string_literals(source: &str) -> Vec<String> {
 fn paths_the_tests_read() -> Vec<(String, String)> {
     let root = repo_root();
     let mut found = Vec::new();
-    let crates = std::fs::read_dir(root.join("crates")).expect("crates/ is readable");
-    for entry in crates.flatten() {
-        let tests = entry.path().join("tests");
-        if !tests.is_dir() {
+    for case in cypcb_fixtures::tree::files_git_tracks(&root) {
+        let parts: Vec<&str> = case.split('/').collect();
+        if !matches!(parts.as_slice(), ["crates", _, "tests", file] if file.ends_with(".rs")) {
             continue;
         }
-        for case in std::fs::read_dir(&tests).into_iter().flatten().flatten() {
-            let path = case.path();
-            if path.extension().is_none_or(|ext| ext != "rs") {
+        let source = std::fs::read_to_string(root.join(&case)).unwrap_or_default();
+        for literal in string_literals(&source) {
+            let literal = literal.as_str();
+            let looks_like_a_path = literal.contains('/')
+                && !literal.contains(char::is_whitespace)
+                && !literal.contains('\\')
+                && literal
+                    .split('/')
+                    .next_back()
+                    .is_some_and(|f| f.contains('.'));
+            // git lists a file once, from the root and with no prefix.
+            // A case reaches its fixture either way: `./scripts/x.sh` from
+            // the root, or `../../tests/fixtures/y` from its own crate.
+            let literal = literal.strip_prefix("./").unwrap_or(literal);
+            let literal = literal.strip_prefix("../../").unwrap_or(literal);
+            // An absolute literal is not a fixture and `root.join` does not
+            // make it one: joining an absolute path throws the base away, so
+            // `/tmp/test_board.dsn` was tested for existence at `/tmp`, found
+            // there whenever the case that writes it had run on this machine,
+            // and reported as a fixture the repository does not carry. This
+            // check went red on 2026-09-13 for that reason and had been green
+            // on the same tree an hour earlier - **a check whose answer depends
+            // on what is lying in a temporary directory is not measuring the
+            // repository.** A case writing to a fixed absolute path is a
+            // separate defect and belongs to a separate check.
+            if literal.starts_with('/') {
                 continue;
             }
-            let source = std::fs::read_to_string(&path).unwrap_or_default();
-            let name = path
-                .strip_prefix(&root)
-                .unwrap_or(&path)
-                .display()
-                .to_string();
-            for literal in string_literals(&source) {
-                let literal = literal.as_str();
-                let looks_like_a_path = literal.contains('/')
-                    && !literal.contains(char::is_whitespace)
-                    && !literal.contains('\\')
-                    && literal
-                        .split('/')
-                        .next_back()
-                        .is_some_and(|f| f.contains('.'));
-                // git lists a file once, from the root and with no prefix.
-                // A case reaches its fixture either way: `./scripts/x.sh` from
-                // the root, or `../../tests/fixtures/y` from its own crate.
-                let literal = literal.strip_prefix("./").unwrap_or(literal);
-                let literal = literal.strip_prefix("../../").unwrap_or(literal);
-                // An absolute literal is not a fixture and `root.join` does not
-                // make it one: joining an absolute path throws the base away, so
-                // `/tmp/test_board.dsn` was tested for existence at `/tmp`, found
-                // there whenever the case that writes it had run on this machine,
-                // and reported as a fixture the repository does not carry. This
-                // check went red on 2026-09-13 for that reason and had been green
-                // on the same tree an hour earlier - **a check whose answer depends
-                // on what is lying in a temporary directory is not measuring the
-                // repository.** A case writing to a fixed absolute path is a
-                // separate defect and belongs to a separate check.
-                if literal.starts_with('/') {
-                    continue;
-                }
-                if looks_like_a_path && root.join(literal).is_file() {
-                    found.push((name.clone(), literal.to_owned()));
-                }
+            if looks_like_a_path && root.join(literal).is_file() {
+                found.push((case.clone(), literal.to_owned()));
             }
         }
     }
@@ -169,20 +144,11 @@ fn shared_directories() -> Vec<String> {
 
 /// Every `.rs` file under `crates/`, source and test alike.
 fn every_rust_file(dir: &Path, out: &mut Vec<PathBuf>) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            if entry.file_name() == "target" {
-                continue;
-            }
-            every_rust_file(&path, out);
-        } else if path.extension().is_some_and(|kind| kind == "rs") {
-            out.push(path);
-        }
-    }
+    out.extend(
+        cypcb_fixtures::tree::tracked_under(dir)
+            .into_iter()
+            .filter(|path| path.extension().is_some_and(|kind| kind == "rs")),
+    );
 }
 
 #[test]

@@ -100,7 +100,7 @@ fn manufacturing_files(dir: &std::path::Path) -> Vec<String> {
     let mut found: Vec<String> = ["gerber", "drill"]
         .iter()
         .flat_map(|sub| {
-            std::fs::read_dir(dir.join(sub))
+            cypcb_fixtures::tree::written_entries(dir.join(sub))
                 .into_iter()
                 .flatten()
                 .filter_map(move |entry| {

@@ -256,57 +256,49 @@ struct Function {
 /// Every function in every test source, with the `#[test]` ones marked.
 fn functions() -> Vec<(String, Function)> {
     let mut found = Vec::new();
-    let mut stack = vec![tests_dir()];
-    while let Some(dir) = stack.pop() {
-        for entry in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                stack.push(path);
+    for path in cypcb_fixtures::tree::tracked_under(tests_dir()) {
+        if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+            continue;
+        }
+        let file = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("?")
+            .to_string();
+        let text = std::fs::read_to_string(&path).expect("a test source is readable");
+        let lines: Vec<&str> = text.lines().collect();
+        for (index, line) in lines.iter().enumerate() {
+            let trimmed = line.trim_start();
+            let Some(rest) = trimmed.strip_prefix("fn ") else {
+                continue;
+            };
+            let Some(name) = rest.split('(').next() else {
+                continue;
+            };
+            if name.is_empty() || !name.chars().all(|c| c.is_alphanumeric() || c == '_') {
                 continue;
             }
-            if path.extension().and_then(|e| e.to_str()) != Some("rs") {
-                continue;
-            }
-            let file = path
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("?")
-                .to_string();
-            let text = std::fs::read_to_string(&path).expect("a test source is readable");
-            let lines: Vec<&str> = text.lines().collect();
-            for (index, line) in lines.iter().enumerate() {
-                let trimmed = line.trim_start();
-                let Some(rest) = trimmed.strip_prefix("fn ") else {
-                    continue;
-                };
-                let Some(name) = rest.split('(').next() else {
-                    continue;
-                };
-                if name.is_empty() || !name.chars().all(|c| c.is_alphanumeric() || c == '_') {
-                    continue;
+            let is_test = lines[index.saturating_sub(4)..index]
+                .iter()
+                .any(|above| above.trim() == "#[test]");
+            let indent = line.len() - trimmed.len();
+            let closing = " ".repeat(indent) + "}";
+            let mut body = String::new();
+            for candidate in &lines[index..] {
+                body.push_str(candidate);
+                body.push('\n');
+                if *candidate == closing {
+                    break;
                 }
-                let is_test = lines[index.saturating_sub(4)..index]
-                    .iter()
-                    .any(|above| above.trim() == "#[test]");
-                let indent = line.len() - trimmed.len();
-                let closing = " ".repeat(indent) + "}";
-                let mut body = String::new();
-                for candidate in &lines[index..] {
-                    body.push_str(candidate);
-                    body.push('\n');
-                    if *candidate == closing {
-                        break;
-                    }
-                }
-                found.push((
-                    name.to_string(),
-                    Function {
-                        file: file.clone(),
-                        body,
-                        is_test,
-                    },
-                ));
             }
+            found.push((
+                name.to_string(),
+                Function {
+                    file: file.clone(),
+                    body,
+                    is_test,
+                },
+            ));
         }
     }
     found
@@ -401,6 +393,7 @@ const ARTEFACT_READS: &[&str] = &[
     "File::open",
     "OpenOptions",
     "read_dir",
+    "written_entries",
     "metadata(",
     ".exists()",
 ];

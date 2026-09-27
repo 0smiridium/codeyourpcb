@@ -17,6 +17,8 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use cypcb_fixtures::tree::{tracked_dirs_in, tracked_in};
+
 fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -50,19 +52,8 @@ fn declared(root: &Path) -> BTreeMap<String, String> {
 fn milestone_summaries(root: &Path) -> Vec<PathBuf> {
     let mut found = Vec::new();
     let milestones = root.join(".gsd").join("milestones");
-    let Ok(entries) = std::fs::read_dir(&milestones) else {
-        return found;
-    };
-    for entry in entries {
-        let dir = entry.expect("a directory entry").path();
-        if !dir.is_dir() {
-            continue;
-        }
-        let Ok(inner) = std::fs::read_dir(&dir) else {
-            continue;
-        };
-        for file in inner {
-            let path = file.expect("a directory entry").path();
+    for dir in tracked_dirs_in(&milestones) {
+        for path in tracked_in(&dir) {
             if path
                 .file_name()
                 .and_then(|n| n.to_str())

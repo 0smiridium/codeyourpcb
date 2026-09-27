@@ -51,9 +51,8 @@ fn preset_dir() -> PathBuf {
 
 /// Every preset module, as (file stem, source).
 fn sources() -> Vec<(String, String)> {
-    let mut files: Vec<PathBuf> = std::fs::read_dir(preset_dir())
-        .expect("the preset modules are beside this crate's source")
-        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+    let mut files: Vec<PathBuf> = cypcb_fixtures::tree::tracked_in(preset_dir())
+        .into_iter()
         .filter(|path| path.extension().is_some_and(|kind| kind == "rs"))
         .collect();
     files.sort();

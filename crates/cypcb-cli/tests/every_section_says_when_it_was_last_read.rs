@@ -952,22 +952,7 @@ const NOT_SOURCE: &[&str] = &["target", "node_modules", "pkg", "dist", ".git"];
 /// and passed in the worktree they were written in. What the repository holds
 /// is what git answers, whatever else is lying on the disk.
 fn tracked_files(root: &Path) -> Vec<String> {
-    let output = Command::new("git")
-        .args(["ls-files", "-z"])
-        .current_dir(root)
-        .output()
-        .expect("git ls-files: the suite runs from a checkout, so git must answer");
-    assert!(
-        output.status.success(),
-        "git ls-files failed in {}: {}",
-        root.display(),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    String::from_utf8_lossy(&output.stdout)
-        .split('\0')
-        .filter(|entry| !entry.is_empty())
-        .map(str::to_owned)
-        .collect()
+    cypcb_fixtures::tree::files_git_tracks(root)
 }
 
 /// A tracked file that sits under none of the `NOT_SOURCE` directories.
@@ -1910,7 +1895,7 @@ fn the_table_of_searches_is_re_run_rather_than_read() {
             line.split('`')
                 .skip(1)
                 .step_by(2)
-                .find(|span| span.starts_with("grep -ril") && span.contains("--include="))
+                .find(|span| span.starts_with("git grep -il") && span.contains(" -- "))
         })
         .expect(
             "the paragraph above the table prints the command it ran, in backticks, and this \
@@ -1918,22 +1903,15 @@ fn the_table_of_searches_is_re_run_rather_than_read() {
              unreproducible by construction, and a scope kept here instead would be the copy \
              that goes stale while the section moves.",
         );
-    let include = command
-        .split_whitespace()
-        .find(|token| token.starts_with("--include="))
-        .expect("the command names what it searched");
-    let scope = command
-        .split_whitespace()
-        .last()
+    // The canon prints the `git grep` a reader runs; this runs the same search
+    // over the same pathspec, so an ignored tree in somebody's checkout is not
+    // counted as the repository's.
+    let pathspec = command
+        .rsplit(" -- ")
+        .next()
+        .map(|spec| spec.trim().trim_matches('\''))
+        .filter(|spec| !spec.is_empty())
         .expect("the command names where it searched");
-    // The canon prints `grep -ril` for a reader to run and says it reads the
-    // tracked files; this runs the same search through git, so an ignored tree
-    // in somebody's checkout is not counted as the repository's.
-    let pathspec = format!(
-        "{}/{}",
-        scope.trim_end_matches('/'),
-        include.trim_start_matches("--include=")
-    );
 
     struct Row {
         phrase: String,
@@ -2536,6 +2514,128 @@ fn a_recorded_command_beside_a_figure_still_prints_it() {
          with, or when a directory moves out of the command and into the prose beside it - and \
          both read as tidying. If one really did go, lower the floor in the same commit."
     );
+}
+
+/// Below this the scan has stopped finding the commands rather than found them
+/// clean: 23 in the prose and 95 lines of the verification block on 2026-09-27.
+const COMMANDS_READ_FLOOR: usize = 118;
+
+/// **A recorded command reads what git tracks, not what the disk holds.** A
+/// checkout holds files a clone does not, and a shell glob, an `ls` or a
+/// `grep -r` counts them: with one extra file in every tracked directory the
+/// commands above stopped printing the figures their sentences state, on a tree
+/// the repository never held. `git ls-files` and `git grep` answer from the
+/// index, so the canon records those, and this holds every command it records -
+/// in the prose and in the verification block - to it.
+#[test]
+fn no_recorded_command_reads_the_disk() {
+    let root = repo_root();
+    let canon =
+        std::fs::read_to_string(root.join("docs/ROUTING-CANON.md")).expect("the canon is there");
+
+    let mut commands: Vec<String> = canon_prose_only(&canon)
+        .split('`')
+        .skip(1)
+        .step_by(2)
+        .map(|span| span.replace('\n', " "))
+        .filter(|span| {
+            span.contains(' ')
+                && span
+                    .split_whitespace()
+                    .next()
+                    .is_some_and(|tool| RECORDED_TOOLS.contains(&tool))
+        })
+        .collect();
+    let in_prose = commands.len();
+    let mut fenced = false;
+    for line in canon.lines() {
+        if line.trim_start().starts_with("```") {
+            fenced = !fenced;
+            continue;
+        }
+        if fenced && !line.trim().is_empty() && !line.trim_start().starts_with('#') {
+            commands.push(line.trim().to_owned());
+        }
+    }
+
+    let on_disk: Vec<&String> = commands.iter().filter(|c| reads_the_disk(c)).collect();
+    eprintln!(
+        "recorded commands read: {in_prose} in the prose, {} in the verification block; \
+         reading the disk: {}",
+        commands.len() - in_prose,
+        on_disk.len()
+    );
+    assert!(
+        on_disk.is_empty(),
+        "the canon records a command that reads the disk rather than the repository: \
+         {on_disk:#?}\n\
+         \n  Write it with `git ls-files` or `git grep`, and a glob as a pathspec in quotes - \
+         `':(glob)examples/*.cypcb'` for one directory, `'crates/*.rs'` for every depth."
+    );
+    assert!(
+        commands.len() >= COMMANDS_READ_FLOOR,
+        "this read {} recorded commands and expected at least {COMMANDS_READ_FLOOR}, so it is \
+         not reading the canon it thinks it is",
+        commands.len()
+    );
+}
+
+/// Whether a recorded command lists or searches the disk: a glob the shell
+/// expands, a recursive `grep`, or `find`. Quoted text is a pattern or a
+/// pathspec and is left out, and a `git` stage reads the index.
+fn reads_the_disk(command: &str) -> bool {
+    let command = command.split(" #").next().unwrap_or(command);
+    let mut unquoted = String::new();
+    let mut quote: Option<char> = None;
+    for c in command.chars() {
+        match quote {
+            Some(open) if c == open => quote = None,
+            Some(_) => {}
+            None if c == '\'' || c == '"' => quote = Some(c),
+            None => unquoted.push(c),
+        }
+    }
+    unquoted.split(['|', ';', '(', ')']).any(|stage| {
+        let words: Vec<&str> = stage.split_whitespace().collect();
+        let Some((tool, args)) = words.split_first() else {
+            return false;
+        };
+        if *tool == "git" {
+            return false;
+        }
+        let recursive = *tool == "grep"
+            && args.iter().any(|word| {
+                *word == "--recursive"
+                    || (word.starts_with('-')
+                        && !word.starts_with("--")
+                        && word.contains(['r', 'R']))
+            });
+        recursive || *tool == "find" || args.iter().any(|word| word.contains(['*', '?']))
+    })
+}
+
+#[test]
+fn a_command_that_reads_the_disk_is_told_from_one_that_reads_git() {
+    for disk in [
+        "ls examples/*.cypcb | wc -l",
+        "grep -l teardrop examples/*.cypcb | wc -l",
+        "grep -rn teardrop crates/cypcb-drc/src/",
+        "grep -rln min_stub --include=*.rs crates/ | wc -l",
+        "for f in tests/fixtures/benchmark/*.kicad_pcb; do",
+        "find crates -name '*.rs'",
+    ] {
+        assert!(reads_the_disk(disk), "{disk}");
+    }
+    for git in [
+        "git ls-files ':(glob)examples/*.cypcb' | wc -l",
+        "git grep -ln min_stub -- 'crates/*.rs' | wc -l",
+        "grep -c '#\\[test\\]' crates/cypcb-drc/src/rules/pad_entry.rs",
+        "for f in $(git ls-files ':(glob)tests/fixtures/benchmark/*.kicad_pcb'); do",
+        "grep -hE \"^\\s*\\(at [-0-9.]+\\)\" file.kicad_pcb # the two, printed",
+        "ls crates/cypcb-drc/src/rules/unrouted_pin.rs",
+    ] {
+        assert!(!reads_the_disk(git), "{git}");
+    }
 }
 
 const RECORDED_RANGES_FLOOR: usize = 19;
