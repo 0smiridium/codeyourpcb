@@ -232,10 +232,12 @@ fn the_smoother_is_not_where_they_come_from() {
     // replacement segments stopped crossing other nets and two of multi_ic's
     // corners went with them while qfp_fanout gained one. 166 since
     // 2026-09-25, on the boards read the right way up rather than mirrored.
+    // 158 since 2026-09-27, when two pads of one net that touch became one
+    // piece and multi_ic stopped routing between them (65 -> 57).
     let total: usize = table.iter().map(|(_, on, _)| on.acute).sum();
     assert!(
-        total >= 166,
-        "the six fixtures drew 166 acute corners between them on 2026-09-25 \
+        total >= 158,
+        "the six fixtures drew 158 acute corners between them on 2026-09-27 \
          and this run counted {total}"
     );
 }

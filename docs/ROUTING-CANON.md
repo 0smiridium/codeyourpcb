@@ -905,10 +905,11 @@ read 2026-09-27), and so does `copper_pieces`, which `net-split`,
 `unrouted-pin`, the router and the viewer's ratsnest read. KiCad's contact test
 is strict for circle against circle and circle against rectangle and inclusive
 for rectangle against rectangle (`shape_collisions.cpp` lines 51, 131 and
-787-795, `box2.h` line 333); ours is one test, inclusive: a gap of zero, the
-gap at which `ClearanceRule` reports two nets shorted and the paste rule takes
-two openings of one net for one hole. On multi_ic this takes U5.2/U5.3,
-J2.4/J2.5 and J2.7/J2.8 out of `unrouted-pin`. Measured 2026-09-27 by
+787-795, and line 333 of KiCad's libs/kimath/include/math/box2.h); ours is
+one test, inclusive: a gap of zero, the gap at which `ClearanceRule` reports
+two nets shorted and the paste rule takes two openings of one net for one
+hole. On multi_ic this takes U5.2/U5.3, J2.4/J2.5 and J2.7/J2.8 out of
+`unrouted-pin`. Measured 2026-09-27 by
 `cargo test -p cypcb-render --test pads_that_touch_are_one_piece`, which also
 holds two pads of two nets edge to edge to a short and to two pieces, and two
 pads of one net 0.01mm apart to a ratsnest line.
