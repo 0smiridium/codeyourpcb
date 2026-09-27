@@ -1156,6 +1156,7 @@ dependencies = [
  "cypcb-world",
  "dashmap",
  "miette",
+ "rusqlite",
  "serde_json",
  "tokio",
  "tower-lsp-f",

@@ -453,3 +453,65 @@ fn a_bare_name_two_libraries_hold_is_reported_with_both() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// An index `cypcb library import` wrote before the library was part of a
+/// footprint's key, holding the fixture's `R_0603_1608Metric`.
+fn index_in_the_first_schema(dir: &Path) -> PathBuf {
+    let index = dir.join("cypcb-library.db");
+    let footprint = std::fs::read_to_string(
+        fixture_library().join("Test_Library.pretty/R_0603_1608Metric.kicad_mod"),
+    )
+    .expect("the fixture footprint reads");
+    let conn = rusqlite::Connection::open(&index).expect("the index is made");
+    conn.execute_batch(include_str!(
+        "../../../tests/fixtures/library-index/schema-0.sql"
+    ))
+    .expect("the old schema is written");
+    conn.execute(
+        "INSERT INTO libraries (source, name) VALUES ('kicad', 'Test_Library')",
+        [],
+    )
+    .expect("the library is written");
+    conn.execute(
+        "INSERT INTO components (source, name, library, footprint_data, metadata_json)
+         VALUES ('kicad', 'R_0603_1608Metric', 'Test_Library', ?1, '{}')",
+        [footprint],
+    )
+    .expect("the footprint is written");
+    index
+}
+
+/// The editor opened the index the way `cypcb library` does, and that moves
+/// a file in the old schema to the new one. Opening a project rewrote the
+/// user's index. The editor reads it as it is now.
+#[test]
+fn an_index_in_the_old_schema_is_read_and_left_byte_for_byte() {
+    let dir = std::env::temp_dir().join(format!("cypcb-lsp-index-old-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("a place to work");
+    let index = index_in_the_first_schema(&dir);
+    std::fs::write(dir.join("board.cypcb"), BOARD).expect("the board is written");
+    let before = std::fs::read(&index).expect("the index reads");
+
+    let doc = opened(&dir);
+    assert!(doc.sync_errors.is_empty(), "{:?}", doc.sync_errors);
+    let card = card_over_the_footprint(&doc);
+    assert!(
+        card.contains("**Footprint: kicad::Test_Library:R_0603_1608Metric**"),
+        "{card}"
+    );
+    let offered = offered_in(&dir);
+    assert!(
+        offered
+            .iter()
+            .any(|label| label == "kicad::Test_Library:R_0603_1608Metric"),
+        "{offered:?}"
+    );
+
+    assert!(
+        std::fs::read(&index).expect("the index reads") == before,
+        "the editor wrote to the index"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}

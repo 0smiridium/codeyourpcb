@@ -55,10 +55,13 @@ The index is one SQLite file, `cypcb-library.db`.
 Commit the `.pretty` folders with the project, not the index. `import`
 rebuilds the index from them. Importing a library again makes the index hold
 what its folder holds: a footprint whose file is gone leaves the index, and
-`import` prints how many left.
+`import` prints how many left. A `.pretty` folder deleted from a directory
+takes its library out of the index the next time that directory is imported.
+A library imported from another directory stays.
 
 An index written before the library was part of the name is moved to the new
-form the first time it is opened, with every footprint kept.
+form the first time `cypcb library` opens it, with every footprint kept. The
+editor and `check` read it as it is and do not write to it.
 
 ## How a footprint name is resolved
 

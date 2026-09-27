@@ -94,40 +94,37 @@ impl CustomSource {
         Ok(())
     }
 
-    /// Remove a component from custom library
-    pub fn remove_component(&self, name: &str) -> Result<(), LibraryError> {
-        let conn = self.conn.lock().unwrap();
-
-        // Get the library name before deleting
-        let library: Option<String> = conn
-            .query_row(
-                "SELECT library FROM components WHERE source = ?1 AND name = ?2",
-                rusqlite::params!["custom", name],
-                |row| row.get(0),
-            )
-            .ok();
-
-        // Delete component
-        let deleted = conn.execute(
-            "DELETE FROM components WHERE source = ?1 AND name = ?2",
-            rusqlite::params!["custom", name],
-        )?;
-
-        if deleted == 0 {
-            return Err(LibraryError::NotFound(format!(
+    /// The one component `written` means, as a design names it after
+    /// `custom::`: `library:name`, or a bare `name` one library alone holds.
+    ///
+    /// A bare name two libraries hold is [`LibraryError::Ambiguous`]: an
+    /// edit by name alone changed the component in every library that held
+    /// the name.
+    fn resolve(conn: &Connection, written: &str) -> Result<(String, String), LibraryError> {
+        match schema::get_component(conn, "custom", written)? {
+            Some(component) => Ok((component.library, component.id.name)),
+            None => Err(LibraryError::NotFound(format!(
                 "Component 'custom::{}' not found",
-                name
-            )));
+                written
+            ))),
         }
+    }
 
-        // Update library component count
-        if let Some(lib_name) = library {
-            conn.execute(
-                "UPDATE libraries SET component_count = component_count - 1
-                 WHERE source = ?1 AND name = ?2",
-                rusqlite::params!["custom", &lib_name],
-            )?;
-        }
+    /// Remove a component from custom library, named `library:name` or by a
+    /// name one library alone holds
+    pub fn remove_component(&self, written: &str) -> Result<(), LibraryError> {
+        let conn = self.conn.lock().unwrap();
+        let (library, name) = Self::resolve(&conn, written)?;
+
+        conn.execute(
+            "DELETE FROM components WHERE source = ?1 AND library = ?2 AND name = ?3",
+            rusqlite::params!["custom", &library, &name],
+        )?;
+        conn.execute(
+            "UPDATE libraries SET component_count = component_count - 1
+             WHERE source = ?1 AND name = ?2",
+            rusqlite::params!["custom", &library],
+        )?;
 
         Ok(())
     }
@@ -135,22 +132,16 @@ impl CustomSource {
     /// Update component category for organization by function
     pub fn update_component_category(
         &self,
-        name: &str,
+        written: &str,
         category: &str,
     ) -> Result<(), LibraryError> {
         let conn = self.conn.lock().unwrap();
+        let (library, name) = Self::resolve(&conn, written)?;
 
-        let updated = conn.execute(
-            "UPDATE components SET category = ?1 WHERE source = ?2 AND name = ?3",
-            rusqlite::params![category, "custom", name],
+        conn.execute(
+            "UPDATE components SET category = ?1 WHERE source = ?2 AND library = ?3 AND name = ?4",
+            rusqlite::params![category, "custom", &library, &name],
         )?;
-
-        if updated == 0 {
-            return Err(LibraryError::NotFound(format!(
-                "Component 'custom::{}' not found",
-                name
-            )));
-        }
 
         Ok(())
     }
@@ -158,23 +149,17 @@ impl CustomSource {
     /// Update component manufacturer for organization
     pub fn update_component_manufacturer(
         &self,
-        name: &str,
+        written: &str,
         manufacturer: &str,
     ) -> Result<(), LibraryError> {
         let conn = self.conn.lock().unwrap();
+        let (library, name) = Self::resolve(&conn, written)?;
 
-        // Update both the manufacturer column and the metadata_json
-        let updated = conn.execute(
-            "UPDATE components SET manufacturer = ?1 WHERE source = ?2 AND name = ?3",
-            rusqlite::params![manufacturer, "custom", name],
+        conn.execute(
+            "UPDATE components SET manufacturer = ?1
+             WHERE source = ?2 AND library = ?3 AND name = ?4",
+            rusqlite::params![manufacturer, "custom", &library, &name],
         )?;
-
-        if updated == 0 {
-            return Err(LibraryError::NotFound(format!(
-                "Component 'custom::{}' not found",
-                name
-            )));
-        }
 
         Ok(())
     }
@@ -379,6 +364,124 @@ mod tests {
 
         source.remove_component("R_10K").unwrap();
         assert_eq!(source.import_library("MyComponents").unwrap().len(), 0);
+    }
+
+    fn part(name: &str, library: &str) -> Component {
+        Component {
+            id: ComponentId::new("custom", name),
+            library: library.to_string(),
+            category: Some("Resistors".to_string()),
+            footprint_data: None,
+            metadata: ComponentMetadata::default(),
+        }
+    }
+
+    /// (category, manufacturer) of each library's `R_10K`, and each
+    /// library's count, A first.
+    fn held(source: &CustomSource) -> Vec<(String, Option<String>, Option<String>, usize)> {
+        ["A", "B"]
+            .iter()
+            .map(|library| {
+                let components = source.import_library(library).unwrap();
+                let count = source
+                    .list_libraries()
+                    .unwrap()
+                    .into_iter()
+                    .find(|lib| lib.name == *library)
+                    .unwrap()
+                    .component_count;
+                let r = components.iter().find(|c| c.id.name == "R_10K");
+                // The manufacturer is written to its column, not to the
+                // metadata `import_library` reads back.
+                let manufacturer: Option<String> = source
+                    .conn
+                    .lock()
+                    .unwrap()
+                    .query_row(
+                        "SELECT manufacturer FROM components
+                         WHERE source = 'custom' AND library = ?1 AND name = 'R_10K'",
+                        [library],
+                        |row| row.get(0),
+                    )
+                    .ok()
+                    .flatten();
+                (
+                    format!("{library}:{}", components.len()),
+                    r.and_then(|c| c.category.clone()),
+                    manufacturer,
+                    count,
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn an_edit_changes_the_one_library_it_names() {
+        let conn = Connection::open_in_memory().unwrap();
+        initialize_schema(&conn).unwrap();
+        let source = CustomSource::new(Arc::new(Mutex::new(conn)));
+        source.create_library("A").unwrap();
+        source.create_library("B").unwrap();
+        source.add_component("A", part("R_10K", "A")).unwrap();
+        source.add_component("B", part("R_10K", "B")).unwrap();
+
+        source
+            .update_component_category("B:R_10K", "Passive")
+            .unwrap();
+        source
+            .update_component_manufacturer("A:R_10K", "Yageo")
+            .unwrap();
+        assert_eq!(
+            held(&source),
+            [
+                (
+                    "A:1".into(),
+                    Some("Resistors".into()),
+                    Some("Yageo".into()),
+                    1
+                ),
+                ("B:1".into(), Some("Passive".into()), None, 1),
+            ]
+        );
+
+        source.remove_component("A:R_10K").unwrap();
+        assert_eq!(
+            held(&source),
+            [
+                ("A:0".into(), None, None, 0),
+                ("B:1".into(), Some("Passive".into()), None, 1),
+            ]
+        );
+        // One library holds it now, so the bare name finds it.
+        source.update_component_category("R_10K", "Fixed").unwrap();
+        assert_eq!(held(&source)[1].1.as_deref(), Some("Fixed"));
+    }
+
+    #[test]
+    fn an_edit_by_a_name_two_libraries_hold_changes_neither() {
+        let conn = Connection::open_in_memory().unwrap();
+        initialize_schema(&conn).unwrap();
+        let source = CustomSource::new(Arc::new(Mutex::new(conn)));
+        source.create_library("A").unwrap();
+        source.create_library("B").unwrap();
+        source.add_component("A", part("R_10K", "A")).unwrap();
+        source.add_component("B", part("R_10K", "B")).unwrap();
+        let before = held(&source);
+
+        let said = |result: Result<(), LibraryError>| result.unwrap_err().to_string();
+        let why = "'custom::R_10K' is in more than one library: \
+                   custom::A:R_10K, custom::B:R_10K; write the one you mean";
+        assert_eq!(said(source.remove_component("R_10K")), why);
+        assert_eq!(said(source.update_component_category("R_10K", "X")), why);
+        assert_eq!(
+            said(source.update_component_manufacturer("R_10K", "X")),
+            why
+        );
+        assert_eq!(held(&source), before);
+        assert_eq!(
+            said(source.remove_component("C:R_10K")),
+            "Not found: Component 'custom::C:R_10K' not found"
+        );
     }
 
     #[test]

@@ -9,6 +9,16 @@ use rusqlite::Connection;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
+/// What [`LibraryManager::import_folder`] did.
+#[derive(Debug, Default)]
+pub struct FolderImport {
+    /// Each library found, by name, with what its import wrote and refused.
+    pub imported: Vec<(String, schema::BatchOutcome)>,
+    /// Each library imported from the folder before whose `.pretty` folder
+    /// is gone, by name, with the footprints removed with it.
+    pub gone: Vec<(String, usize)>,
+}
+
 /// LibraryManager - unified orchestrator for all library operations
 ///
 /// Provides single entry point for:
@@ -43,6 +53,28 @@ impl LibraryManager {
         let conn = Connection::open(db_path)?;
         schema::initialize_schema(&conn)?;
 
+        let conn = Arc::new(Mutex::new(conn));
+
+        Ok(Self {
+            conn: Arc::clone(&conn),
+            kicad_source: KiCadSource::new(Vec::new()),
+            custom_source: CustomSource::new(Arc::clone(&conn)),
+            #[cfg(feature = "jlcpcb")]
+            jlcpcb_source: None,
+        })
+    }
+
+    /// Open the index at `db_path` to read it, and write nothing to it.
+    ///
+    /// [`LibraryManager::new`] moves a file in an older schema to the current
+    /// one, which writes the file. A design is only read against an index, and
+    /// the editor opened it on every keystroke, so opening a project in the
+    /// editor rewrote the user's index. The queries a design asks read an
+    /// older file as it is: its components carry the library column too, and
+    /// its key held one library per name. `cypcb library` still moves it.
+    pub fn open_read_only(db_path: &Path) -> Result<Self, LibraryError> {
+        let conn =
+            Connection::open_with_flags(db_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
         let conn = Arc::new(Mutex::new(conn));
 
         Ok(Self {
@@ -108,11 +140,15 @@ impl LibraryManager {
         // Get components from KiCad source
         let components = self.kicad_source.import_library(name)?;
 
-        // Create library record
+        // Create library record. The folder is kept, so a later import of
+        // the directory holding it can tell when it is gone.
         let library = LibraryInfo {
             source: "kicad".to_string(),
             name: name.to_string(),
-            path: None,
+            path: self
+                .kicad_source
+                .library_folder(name)
+                .map(|folder| folder.to_string_lossy().into_owned()),
             version: None,
             enabled: true,
             component_count: 0,
@@ -145,6 +181,7 @@ impl LibraryManager {
     pub fn auto_import_folder(&self, path: &Path) -> Result<Vec<String>, LibraryError> {
         Ok(self
             .import_folder(path)?
+            .imported
             .into_iter()
             .map(|(name, _)| name)
             .collect())
@@ -153,12 +190,11 @@ impl LibraryManager {
     /// Import every `.pretty` library under a folder, in name order, and say
     /// for each one what was written and what was refused.
     ///
-    /// When two libraries hold a footprint by the same name, the one first
-    /// in name order keeps it.
-    pub fn import_folder(
-        &self,
-        path: &Path,
-    ) -> Result<Vec<(String, schema::BatchOutcome)>, LibraryError> {
+    /// A library imported from this folder before whose `.pretty` folder is
+    /// gone now leaves the index with its footprints; `gone` names it and
+    /// counts them. A library whose folder was not recorded, imported before
+    /// the folder was kept, cannot be told apart and stays.
+    pub fn import_folder(&self, path: &Path) -> Result<FolderImport, LibraryError> {
         let mut libraries = KiCadSource::auto_organize_folder(path)?;
         libraries.sort_by(|a, b| a.name.cmp(&b.name));
         let mut imported = Vec::new();
@@ -175,7 +211,13 @@ impl LibraryManager {
             }
         }
 
-        Ok(imported)
+        let mut conn = self.conn.lock().unwrap();
+        let gone = schema::remove_libraries_where(&mut conn, "kicad", |folder| {
+            let folder = Path::new(folder);
+            folder.parent() == Some(path) && !folder.is_dir()
+        })?;
+
+        Ok(FolderImport { imported, gone })
     }
 
     // ========== Search Operations ==========

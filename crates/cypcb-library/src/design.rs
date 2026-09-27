@@ -70,7 +70,7 @@ pub fn footprint_library_for(ast: &SourceFile, design: &Path) -> FootprintLibrar
             from_design(design, &index)
         )
     };
-    let manager = match LibraryManager::new(&index) {
+    let manager = match LibraryManager::open_read_only(&index) {
         Ok(manager) => manager,
         Err(error) => {
             for full_name in wanted {
@@ -214,7 +214,7 @@ fn reading_for(design: &Path) -> Option<(PathBuf, Reading)> {
 }
 
 fn read_names(index: &Path, stamp: Stamp) -> Reading {
-    let names = LibraryManager::new(index).and_then(|manager| manager.footprint_names());
+    let names = LibraryManager::open_read_only(index).and_then(|manager| manager.footprint_names());
     match names {
         Ok(names) => Reading {
             stamp,
