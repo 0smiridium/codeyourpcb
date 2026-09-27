@@ -359,7 +359,6 @@ CREATE TABLE components (
     manufacturer TEXT,
     mpn TEXT,
     package TEXT,
-    metadata_json TEXT,
     thumbnail BLOB,
     model_3d_path TEXT,
     UNIQUE(source, name)

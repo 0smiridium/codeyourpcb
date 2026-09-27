@@ -30,7 +30,6 @@ CREATE TABLE IF NOT EXISTS components (
     value TEXT,
     package TEXT,
     step_model_path TEXT,
-    metadata_json TEXT,
     UNIQUE(source, library, name),
     FOREIGN KEY (source, library) REFERENCES libraries(source, name)
 );
@@ -91,8 +90,11 @@ CREATE INDEX IF NOT EXISTS idx_library_versions_lookup ON library_versions(sourc
 ///
 /// 0 is a file written before the version was kept: it keys a component by
 /// source and name, so two libraries could not hold one name. 1 keys it by
-/// source, library and name, the way KiCad's `LIB_ID` does.
-pub const SCHEMA_VERSION: i64 = 1;
+/// source, library and name, the way KiCad's `LIB_ID` does. 2 keeps each
+/// metadata field in its column only: 0 and 1 also kept a copy of them all in
+/// `metadata_json`, an edit changed the column and not the copy, and a reader
+/// of the copy got the value from before the edit.
+pub const SCHEMA_VERSION: i64 = 2;
 
 /// Initialize the library database schema
 ///
@@ -105,7 +107,7 @@ pub fn initialize_schema(conn: &Connection) -> Result<(), LibraryError> {
         |row| row.get(0),
     )?;
     if has_components && version < SCHEMA_VERSION {
-        key_components_by_library(conn)?;
+        rebuild_components(conn)?;
     }
     conn.execute_batch(LIBRARY_SCHEMA)?;
     // Written only when it changes: every write moves the change counter in
@@ -118,14 +120,18 @@ pub fn initialize_schema(conn: &Connection) -> Result<(), LibraryError> {
     Ok(())
 }
 
-/// Move a file keyed by (source, name) to the key (source, library, name).
+/// Move a file in an older schema to this one.
 ///
-/// SQLite cannot change a table's UNIQUE constraint, so the table is built
-/// again under the new schema and the rows are copied with their rowids. The
-/// old key is the new one without the library, so no row can conflict. The
-/// search index is built again from the copied rows. It all happens in one
-/// transaction: a copy that does not keep every row changes nothing.
-fn key_components_by_library(conn: &Connection) -> Result<(), LibraryError> {
+/// Schema 0 keyed a component by (source, name) and SQLite cannot change a
+/// table's UNIQUE constraint, so the table is built again under this schema
+/// and the rows are copied with their rowids. The old key is the new one
+/// without the library, so no row can conflict. Schemas 0 and 1 held each
+/// metadata field twice, in its column and in `metadata_json`. An edit
+/// changed the column only, so the column's value is kept; the copy fills a
+/// column only where the column is empty. The search index is built again
+/// from the copied rows. It all happens in one transaction: a copy that does
+/// not keep every row changes nothing.
+fn rebuild_components(conn: &Connection) -> Result<(), LibraryError> {
     let tx = conn.unchecked_transaction()?;
     tx.execute_batch(
         "DROP TRIGGER IF EXISTS components_ai;
@@ -135,29 +141,34 @@ fn key_components_by_library(conn: &Connection) -> Result<(), LibraryError> {
          DROP INDEX IF EXISTS idx_components_manufacturer;
          DROP INDEX IF EXISTS idx_components_value;
          DROP TABLE IF EXISTS components_fts;
-         ALTER TABLE components RENAME TO components_keyed_by_name;",
+         ALTER TABLE components RENAME TO components_before;",
     )?;
     tx.execute_batch(LIBRARY_SCHEMA)?;
-    let before: usize =
-        tx.query_row("SELECT count(*) FROM components_keyed_by_name", [], |row| {
-            row.get(0)
-        })?;
+    let before: usize = tx.query_row("SELECT count(*) FROM components_before", [], |row| {
+        row.get(0)
+    })?;
     let copied = tx.execute(
         "INSERT INTO components
          (rowid, source, name, library, category, footprint_data, description, datasheet_url,
-          manufacturer, mpn, value, package, step_model_path, metadata_json)
-         SELECT rowid, source, name, library, category, footprint_data, description, datasheet_url,
-                manufacturer, mpn, value, package, step_model_path, metadata_json
-         FROM components_keyed_by_name",
+          manufacturer, mpn, value, package, step_model_path)
+         SELECT rowid, source, name, library, category, footprint_data,
+                coalesce(description, CASE WHEN json_valid(metadata_json) THEN json_extract(metadata_json, '$.description') END),
+                coalesce(datasheet_url, CASE WHEN json_valid(metadata_json) THEN json_extract(metadata_json, '$.datasheet_url') END),
+                coalesce(manufacturer, CASE WHEN json_valid(metadata_json) THEN json_extract(metadata_json, '$.manufacturer') END),
+                coalesce(mpn, CASE WHEN json_valid(metadata_json) THEN json_extract(metadata_json, '$.mpn') END),
+                coalesce(value, CASE WHEN json_valid(metadata_json) THEN json_extract(metadata_json, '$.value') END),
+                coalesce(package, CASE WHEN json_valid(metadata_json) THEN json_extract(metadata_json, '$.package') END),
+                coalesce(step_model_path, CASE WHEN json_valid(metadata_json) THEN json_extract(metadata_json, '$.step_model_path') END)
+         FROM components_before",
         [],
     )?;
     if copied != before {
         return Err(LibraryError::NotIndexed(format!(
-            "moving the index to the library key copied {copied} of {before} rows; \
+            "moving the index to schema {SCHEMA_VERSION} copied {copied} of {before} rows; \
              the file is left as it was"
         )));
     }
-    tx.execute_batch("DROP TABLE components_keyed_by_name;")?;
+    tx.execute_batch("DROP TABLE components_before;")?;
     tx.commit()?;
     Ok(())
 }
@@ -295,14 +306,11 @@ fn write_component(
     component: &Component,
     written_before: bool,
 ) -> Result<Written, LibraryError> {
-    let metadata_json = serde_json::to_string(&component.metadata)
-        .map_err(|e| LibraryError::Parse(format!("Failed to serialize metadata: {}", e)))?;
-
     let inserted = conn.execute(
         "INSERT INTO components
          (source, name, library, category, footprint_data, description, datasheet_url,
-          manufacturer, mpn, value, package, step_model_path, metadata_json)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+          manufacturer, mpn, value, package, step_model_path)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
         params![
             &component.id.source,
             &component.id.name,
@@ -316,7 +324,6 @@ fn write_component(
             &component.metadata.value,
             &component.metadata.package,
             &component.metadata.step_model_path,
-            &metadata_json,
         ],
     );
 
@@ -357,9 +364,8 @@ fn write_component(
             mpn = ?6,
             value = ?7,
             package = ?8,
-            step_model_path = ?9,
-            metadata_json = ?10
-         WHERE source = ?11 AND name = ?12 AND library = ?13",
+            step_model_path = ?9
+         WHERE source = ?10 AND name = ?11 AND library = ?12",
         params![
             &component.category,
             &component.footprint_data,
@@ -370,7 +376,6 @@ fn write_component(
             &component.metadata.value,
             &component.metadata.package,
             &component.metadata.step_model_path,
-            &metadata_json,
             &component.id.source,
             &component.id.name,
             &component.library,
@@ -492,7 +497,7 @@ pub fn get_component(
 ) -> Result<Option<Component>, LibraryError> {
     const COLUMNS: &str =
         "SELECT source, name, library, category, footprint_data, description, datasheet_url,
-                manufacturer, mpn, value, package, step_model_path, metadata_json
+                manufacturer, mpn, value, package, step_model_path
          FROM components";
     let mut found = match written.split_once(':') {
         Some((library, name)) => components_where(
@@ -515,6 +520,25 @@ pub fn get_component(
     Ok(found.pop())
 }
 
+/// A component's metadata from the row's columns `description` to
+/// `step_model_path`, the first of them at `first`, in the order the table
+/// holds them. Each reader builds it here, so none can read a field from a
+/// place an edit does not write.
+pub(crate) fn metadata_from_row(
+    row: &rusqlite::Row,
+    first: usize,
+) -> rusqlite::Result<ComponentMetadata> {
+    Ok(ComponentMetadata {
+        description: row.get(first)?,
+        datasheet_url: row.get(first + 1)?,
+        manufacturer: row.get(first + 2)?,
+        mpn: row.get(first + 3)?,
+        value: row.get(first + 4)?,
+        package: row.get(first + 5)?,
+        step_model_path: row.get(first + 6)?,
+    })
+}
+
 fn components_where(
     conn: &Connection,
     sql: &str,
@@ -524,10 +548,7 @@ fn components_where(
     let mut rows = stmt.query(params)?;
     let mut found = Vec::new();
     while let Some(row) = rows.next()? {
-        let metadata_json: String = row.get(12)?;
-        let metadata: ComponentMetadata = serde_json::from_str(&metadata_json)
-            .map_err(|e| LibraryError::Parse(format!("Failed to parse metadata: {}", e)))?;
-
+        let metadata = metadata_from_row(row, 5)?;
         found.push(Component {
             id: crate::models::ComponentId {
                 source: row.get(0)?,
@@ -1130,5 +1151,102 @@ mod tests {
             first.rejected[0],
             Rejection::TwiceInOneLibrary { .. }
         ));
+    }
+
+    /// A file in schema 1, where each metadata field was kept in its column
+    /// and again in `metadata_json`. `EDITED` had its manufacturer and model
+    /// edited, which changed the columns only. `COPY_ONLY` holds fields in the
+    /// copy alone, and `NOT_JSON` empty columns and a copy that does not parse.
+    const WITH_A_JSON_COPY: &str = concat!(
+        include_str!("../../../tests/fixtures/library-index/schema-1.sql"),
+        r#"
+        INSERT INTO libraries (source, name) VALUES ('custom', 'A');
+        INSERT INTO components
+            (source, name, library, description, manufacturer, step_model_path, metadata_json)
+        VALUES
+            ('custom', 'EDITED', 'A', 'imported', 'edited', 'edited.step',
+             '{"description":"imported","manufacturer":"imported","step_model_path":null}'),
+            ('custom', 'COPY_ONLY', 'A', NULL, NULL, NULL,
+             '{"description":"from the copy","manufacturer":"from the copy","mpn":"from the copy"}'),
+            ('custom', 'NOT_JSON', 'A', 'column', NULL, NULL, 'not json');
+    "#
+    );
+
+    /// (description, manufacturer, mpn, step model) of `custom::A:<name>`.
+    fn metadata_of(conn: &Connection, name: &str) -> [Option<String>; 4] {
+        let m = get_component(conn, "custom", &format!("A:{name}"))
+            .unwrap()
+            .unwrap()
+            .metadata;
+        [m.description, m.manufacturer, m.mpn, m.step_model_path]
+    }
+
+    #[test]
+    fn a_file_with_a_json_copy_keeps_the_edited_column_and_loses_the_copy() {
+        let dir = std::env::temp_dir().join(format!("cypcb-json-copy-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("cypcb-library.db");
+        let _ = std::fs::remove_file(&file);
+        Connection::open(&file)
+            .unwrap()
+            .execute_batch(WITH_A_JSON_COPY)
+            .unwrap();
+        let some = |value: &str| Some(value.to_string());
+
+        // The editor reads the file as it is, from the columns.
+        let before = std::fs::read(&file).unwrap();
+        let reader = crate::LibraryManager::open_read_only(&file).unwrap();
+        let edited = reader.get_component("custom", "A:EDITED").unwrap().unwrap();
+        assert_eq!(edited.metadata.manufacturer, some("edited"));
+        drop(reader);
+        assert!(
+            std::fs::read(&file).unwrap() == before,
+            "reading wrote the file"
+        );
+
+        let conn = Connection::open(&file).unwrap();
+        initialize_schema(&conn).unwrap();
+
+        assert_eq!(
+            metadata_of(&conn, "EDITED"),
+            [some("imported"), some("edited"), None, some("edited.step")]
+        );
+        assert_eq!(
+            metadata_of(&conn, "COPY_ONLY"),
+            [
+                some("from the copy"),
+                some("from the copy"),
+                some("from the copy"),
+                None
+            ]
+        );
+        assert_eq!(
+            metadata_of(&conn, "NOT_JSON"),
+            [some("column"), None, None, None]
+        );
+        let copy_left: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM pragma_table_info('components') WHERE name = 'metadata_json'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(copy_left, 0);
+        let version: i64 = conn
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, SCHEMA_VERSION);
+
+        // The search index is built from the columns the file now holds.
+        let found = |query: &str| -> Vec<String> {
+            crate::search::search_components(&conn, query, &crate::models::SearchFilters::default())
+                .unwrap()
+                .into_iter()
+                .map(|hit| hit.component.id.name)
+                .collect()
+        };
+        assert_eq!(found("from the copy"), ["COPY_ONLY"]);
+        assert_eq!(found("edited"), ["EDITED"]);
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

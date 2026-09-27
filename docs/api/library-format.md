@@ -48,7 +48,7 @@ Stores all component data.
 CREATE TABLE components (
     rowid INTEGER PRIMARY KEY AUTOINCREMENT,
     source TEXT NOT NULL,           -- Source identifier (matches libraries.source)
-    name TEXT NOT NULL,             -- Component name (unique within source)
+    name TEXT NOT NULL,             -- Component name (unique within its library)
     library TEXT NOT NULL,          -- Library name (foreign key to libraries)
     category TEXT,                  -- Component category (e.g., "Resistors", "Capacitors")
     footprint_data TEXT,            -- Raw footprint data (S-expression for KiCad)
@@ -59,8 +59,7 @@ CREATE TABLE components (
     value TEXT,                     -- Component value (e.g., "10k", "100nF")
     package TEXT,                   -- Package type (e.g., "0805", "SOT-23")
     step_model_path TEXT,           -- Optional path to 3D STEP model file
-    metadata_json TEXT,             -- Full ComponentMetadata as JSON (extensibility)
-    UNIQUE(source, name),
+    UNIQUE(source, library, name),
     FOREIGN KEY (source, library) REFERENCES libraries(source, name)
 );
 ```
@@ -68,8 +67,7 @@ CREATE TABLE components (
 **Field purposes:**
 
 - **Individual columns** (description, manufacturer, mpn, etc.) enable SQL WHERE clauses and FTS5 indexing
-- **metadata_json** preserves full ComponentMetadata structure for source-specific fields
-- **Composite UNIQUE constraint** (source, name) enforces namespace isolation
+- **Composite UNIQUE constraint** (source, library, name) lets two libraries hold one name
 
 **Example row:**
 ```
@@ -85,8 +83,7 @@ manufacturer=NULL,
 mpn=NULL,
 value=NULL,
 package="0805",
-step_model_path=NULL,
-metadata_json="{\"description\":\"Resistor SMD 0805...\",\"package\":\"0805\",...}"
+step_model_path=NULL
 ```
 
 #### Indexes
@@ -244,20 +241,18 @@ pub struct ComponentMetadata {
 - JLCPCB: Has manufacturer, MPN, value, package, datasheet URL
 - Custom: May have any subset
 
-### Dual Storage Strategy
+### One Place per Field
 
-Component metadata is stored in **two ways**:
+Each metadata field is kept in its own column and nowhere else. The search
+index, the manufacturer filter and every reader of a component take it from
+there, and each edit writes it there.
 
-1. **Individual SQL columns:** Enable WHERE clauses and FTS5 indexing
-2. **metadata_json TEXT column:** Preserves full structure for extensibility
-
-**Why both?**
-
-- SQL columns: Fast filtering (`WHERE manufacturer = 'Texas Instruments'`)
-- JSON column: Preserves all fields without schema changes (forward compatibility)
-
-**Deserialization:**
-When reading components from database, `metadata_json` is parsed back into `ComponentMetadata` struct.
+Schemas 0 and 1 (`PRAGMA user_version`) also kept a JSON copy of all fields in
+`metadata_json`. An edit changed the column and not the copy, so a reader of
+the copy got the value from before the edit. `cypcb library` moves such a file
+to schema 2: it keeps each column's value, takes a field from the copy only
+where its column is empty, and drops the copy. The editor reads an old file
+from its columns and leaves it as it is.
 
 ## Search System
 
@@ -503,8 +498,8 @@ Source → Parse → Import → Index → Search
 ```sql
 INSERT INTO components
     (source, name, library, category, footprint_data, description, datasheet_url,
-     manufacturer, mpn, value, package, step_model_path, metadata_json)
-VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13);
+     manufacturer, mpn, value, package, step_model_path)
+VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12);
 ```
 
 #### UPDATE (Existing Component)
@@ -513,18 +508,16 @@ If component exists (UNIQUE constraint violation), update it:
 
 ```sql
 UPDATE components SET
-    library = ?1,
-    category = ?2,
-    footprint_data = ?3,
-    description = ?4,
-    datasheet_url = ?5,
-    manufacturer = ?6,
-    mpn = ?7,
-    value = ?8,
-    package = ?9,
-    step_model_path = ?10,
-    metadata_json = ?11
-WHERE source = ?12 AND name = ?13;
+    category = ?1,
+    footprint_data = ?2,
+    description = ?3,
+    datasheet_url = ?4,
+    manufacturer = ?5,
+    mpn = ?6,
+    value = ?7,
+    package = ?8,
+    step_model_path = ?9
+WHERE source = ?10 AND name = ?11 AND library = ?12;
 ```
 
 **Why separate INSERT try/UPDATE pattern?**

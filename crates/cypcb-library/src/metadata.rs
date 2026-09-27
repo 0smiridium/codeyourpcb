@@ -202,16 +202,15 @@ pub fn get_component_metadata(
     source: &str,
     name: &str,
 ) -> Result<Option<ComponentMetadata>, LibraryError> {
-    let mut stmt =
-        conn.prepare("SELECT metadata_json FROM components WHERE source = ?1 AND name = ?2")?;
+    let mut stmt = conn.prepare(
+        "SELECT description, datasheet_url, manufacturer, mpn, value, package, step_model_path
+             FROM components WHERE source = ?1 AND name = ?2",
+    )?;
 
     let mut rows = stmt.query(params![source, name])?;
 
     if let Some(row) = rows.next()? {
-        let metadata_json: String = row.get(0)?;
-        let metadata: ComponentMetadata = serde_json::from_str(&metadata_json)
-            .map_err(|e| LibraryError::Parse(format!("Failed to parse metadata: {}", e)))?;
-        Ok(Some(metadata))
+        Ok(Some(crate::schema::metadata_from_row(row, 0)?))
     } else {
         Ok(None)
     }
