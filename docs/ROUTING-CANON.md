@@ -899,6 +899,20 @@ router's own count and does not read the rule. Measured 2026-09-23 by
 which replays the old elimination on `led_blink` and holds the rule to
 reporting the pin it cut off.
 
+**Two pads of one net whose copper touches are one piece.** KiCad joins them
+in its connectivity (`CN_VISITOR`, `connectivity_algo.cpp` line 1072, master,
+read 2026-09-27), and so does `copper_pieces`, which `net-split`,
+`unrouted-pin`, the router and the viewer's ratsnest read. KiCad's contact test
+is strict for circle against circle and circle against rectangle and inclusive
+for rectangle against rectangle (`shape_collisions.cpp` lines 51, 131 and
+787-795, `box2.h` line 333); ours is one test, inclusive: a gap of zero, the
+gap at which `ClearanceRule` reports two nets shorted and the paste rule takes
+two openings of one net for one hole. On multi_ic this takes U5.2/U5.3,
+J2.4/J2.5 and J2.7/J2.8 out of `unrouted-pin`. Measured 2026-09-27 by
+`cargo test -p cypcb-render --test pads_that_touch_are_one_piece`, which also
+holds two pads of two nets edge to edge to a short and to two pieces, and two
+pads of one net 0.01mm apart to a ratsnest line.
+
 *The field R-11 would need does not exist:* `DrcViolation` has no severity, so
 the tiers below have nowhere to live in a row of output. See R-18.
 
