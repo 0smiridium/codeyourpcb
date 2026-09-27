@@ -111,6 +111,7 @@ fn a_quarter_arc_from_the_viewer_is_a_quarter_arc_in_the_legend() {
         Side::Top,
         &CoordinateFormat::FORMAT_MM_2_6,
         &Default::default(),
+        cypcb_export::stamp::Stamp::UNIX_EPOCH,
     )
     .expect("the legend exports");
     assert!(
@@ -145,8 +146,14 @@ fn the_pegs_are_drilled_unplated_and_the_shell_slots_milled() {
     let format = CoordinateFormat::FORMAT_MM_2_6;
 
     // GCT USB4105, drawing B4: 2x Ø0.65 non-plated, 5.78 apart.
-    let npth = export_excellon(&mut world, &library, &format, Some(DrillType::NonPlated))
-        .expect("the non-plated drills export");
+    let npth = export_excellon(
+        &mut world,
+        &library,
+        &format,
+        Some(DrillType::NonPlated),
+        cypcb_export::stamp::Stamp::UNIX_EPOCH,
+    )
+    .expect("the non-plated drills export");
     assert_eq!(tools_mm(&npth), vec![0.65], "a 0.65mm tool:\n{npth}");
     assert_eq!(
         npth.matches("X7.10").count() + npth.matches("X12.89").count(),
@@ -159,8 +166,14 @@ fn the_pegs_are_drilled_unplated_and_the_shell_slots_milled() {
     );
 
     // Four shell slots, 0.60 wide: milled, with the 0.60 tool.
-    let pth = export_excellon(&mut world, &library, &format, Some(DrillType::Plated))
-        .expect("the plated drills export");
+    let pth = export_excellon(
+        &mut world,
+        &library,
+        &format,
+        Some(DrillType::Plated),
+        cypcb_export::stamp::Stamp::UNIX_EPOCH,
+    )
+    .expect("the plated drills export");
     assert_eq!(pth.matches("G85").count(), 4, "four slots milled:\n{pth}");
 
     // Along the pads' long side, which is Y: the bit travels the slot's

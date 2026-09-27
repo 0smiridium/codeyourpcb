@@ -49,13 +49,14 @@ pub const OUTLINE_WIDTH: Nm = Nm(100_000); // 0.1mm
 /// world.set_board("test".into(), (Nm::from_mm(100.0), Nm::from_mm(80.0)), 2);
 /// let format = CoordinateFormat::FORMAT_MM_2_6;
 ///
-/// let gerber = export_outline(&world, &format).unwrap();
+/// let gerber = export_outline(&world, &format, cypcb_export::stamp::Stamp::UNIX_EPOCH).unwrap();
 /// assert!(gerber.contains("TF.FileFunction,Profile,NP"));
 /// assert!(gerber.contains("M02*")); // End of file
 /// ```
 pub fn export_outline(
     world: &BoardWorld,
     format: &CoordinateFormat,
+    stamp: crate::stamp::Stamp,
 ) -> Result<String, OutlineError> {
     let mut output = String::new();
     let mut apertures = ApertureManager::new();
@@ -71,6 +72,7 @@ pub fn export_outline(
         board_name,
         format,
         layer_stack.count,
+        stamp,
     ));
 
     // Collect drawing commands
@@ -153,7 +155,7 @@ mod tests {
         );
 
         let format = CoordinateFormat::FORMAT_MM_2_6;
-        let gerber = export_outline(&world, &format).unwrap();
+        let gerber = export_outline(&world, &format, crate::stamp::Stamp::UNIX_EPOCH).unwrap();
 
         // Check header
         assert!(gerber.contains("TF.FileFunction,Profile,NP"));
@@ -170,7 +172,7 @@ mod tests {
         world.set_board("test".into(), (Nm::from_mm(50.0), Nm::from_mm(40.0)), 2);
 
         let format = CoordinateFormat::FORMAT_MM_2_6;
-        let gerber = export_outline(&world, &format).unwrap();
+        let gerber = export_outline(&world, &format, crate::stamp::Stamp::UNIX_EPOCH).unwrap();
 
         // Should contain 5 coordinate pairs (4 corners + close path)
         // Move to (0,0), draw to (50,0), draw to (50,40), draw to (0,40), draw to (0,0)
@@ -187,7 +189,7 @@ mod tests {
         world.set_board("test".into(), (Nm::from_mm(100.0), Nm::from_mm(100.0)), 2);
 
         let format = CoordinateFormat::FORMAT_MM_2_6;
-        let gerber = export_outline(&world, &format).unwrap();
+        let gerber = export_outline(&world, &format, crate::stamp::Stamp::UNIX_EPOCH).unwrap();
 
         // Should define a circular aperture (D10) for outline width
         assert!(gerber.contains("%ADD10C,0.100000*%")); // 0.1mm circular aperture
@@ -199,7 +201,7 @@ mod tests {
         let world = BoardWorld::new(); // No board set
         let format = CoordinateFormat::FORMAT_MM_2_6;
 
-        let result = export_outline(&world, &format);
+        let result = export_outline(&world, &format, crate::stamp::Stamp::UNIX_EPOCH);
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), OutlineError::NoBoardSize));
     }
@@ -210,7 +212,7 @@ mod tests {
         world.set_board("test".into(), (Nm::from_mm(25.4), Nm::from_mm(25.4)), 2);
 
         let format = CoordinateFormat::FORMAT_MM_2_6;
-        let gerber = export_outline(&world, &format).unwrap();
+        let gerber = export_outline(&world, &format, crate::stamp::Stamp::UNIX_EPOCH).unwrap();
 
         // Check format declaration
         assert!(gerber.contains("%FSLAX26Y26*%"));

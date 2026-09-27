@@ -176,6 +176,7 @@ pub fn build_job_file(
     board_name: &str,
     written: &[&Path],
     output_dir: &Path,
+    stamp: crate::stamp::Stamp,
 ) -> String {
     let entries: Vec<FileEntry> = written
         .iter()
@@ -244,7 +245,7 @@ pub fn build_job_file(
                 "Application": "cypcb",
                 "Version": env!("CARGO_PKG_VERSION"),
             },
-            "CreationDate": crate::stamp::now().format("%Y-%m-%dT%H:%M:%S%z").to_string(),
+            "CreationDate": stamp.format("%Y-%m-%dT%H:%M:%S%z").to_string(),
         }),
     );
     job.insert("GeneralSpecs".to_string(), Value::Object(general));

@@ -81,6 +81,7 @@ fn the_opening_is_the_pad_plus_the_expansion_on_each_side() {
         Side::Top,
         &CoordinateFormat::FORMAT_MM_2_6,
         &config,
+        cypcb_export::stamp::Stamp::UNIX_EPOCH,
     )
     .expect("the mask exports");
 
@@ -103,6 +104,7 @@ fn a_fab_asking_for_less_gets_less() {
         Side::Top,
         &CoordinateFormat::FORMAT_MM_2_6,
         &config,
+        cypcb_export::stamp::Stamp::UNIX_EPOCH,
     )
     .expect("the mask exports");
 

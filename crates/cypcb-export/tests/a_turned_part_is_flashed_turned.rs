@@ -114,7 +114,14 @@ fn apertures_at_x(gerber: &str, x: f64, y_range: (f64, f64)) -> Vec<String> {
 
 fn copper(layer: Layer) -> String {
     let (mut world, library) = board();
-    export_copper_layer(&mut world, &library, layer, &FORMAT).unwrap()
+    export_copper_layer(
+        &mut world,
+        &library,
+        layer,
+        &FORMAT,
+        cypcb_export::stamp::Stamp::UNIX_EPOCH,
+    )
+    .unwrap()
 }
 
 fn mask(side: Side) -> String {
@@ -125,6 +132,7 @@ fn mask(side: Side) -> String {
         side,
         &FORMAT,
         &MaskPasteConfig::default(),
+        cypcb_export::stamp::Stamp::UNIX_EPOCH,
     )
     .unwrap()
 }
@@ -137,6 +145,7 @@ fn paste(side: Side) -> String {
         side,
         &FORMAT,
         &MaskPasteConfig::default(),
+        cypcb_export::stamp::Stamp::UNIX_EPOCH,
     )
     .unwrap()
 }

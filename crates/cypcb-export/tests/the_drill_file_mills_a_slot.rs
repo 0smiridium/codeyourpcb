@@ -69,8 +69,14 @@ fn board_with_hole(
 
 fn drill_file(drill: Nm, slot: Option<(Nm, Nm)>, rotation: Rotation) -> String {
     let (mut world, library) = board_with_hole(drill, slot, rotation);
-    export_excellon(&mut world, &library, &CoordinateFormat::FORMAT_MM_2_6, None)
-        .expect("the board exports")
+    export_excellon(
+        &mut world,
+        &library,
+        &CoordinateFormat::FORMAT_MM_2_6,
+        None,
+        cypcb_export::stamp::Stamp::UNIX_EPOCH,
+    )
+    .expect("the board exports")
 }
 
 #[test]

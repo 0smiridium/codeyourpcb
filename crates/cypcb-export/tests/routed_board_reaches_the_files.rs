@@ -59,10 +59,22 @@ fn each_copper_layer_carries_the_trace_that_belongs_to_it() {
     let library = FootprintLibrary::new();
     let format = CoordinateFormat::FORMAT_MM_2_6;
 
-    let top =
-        export_copper_layer(&mut world, &library, Layer::TopCopper, &format).expect("top copper");
-    let bottom = export_copper_layer(&mut world, &library, Layer::BottomCopper, &format)
-        .expect("bottom copper");
+    let top = export_copper_layer(
+        &mut world,
+        &library,
+        Layer::TopCopper,
+        &format,
+        cypcb_export::stamp::Stamp::UNIX_EPOCH,
+    )
+    .expect("top copper");
+    let bottom = export_copper_layer(
+        &mut world,
+        &library,
+        Layer::BottomCopper,
+        &format,
+        cypcb_export::stamp::Stamp::UNIX_EPOCH,
+    )
+    .expect("bottom copper");
 
     // D02 moves the aperture, D01 draws to the next point: one segment is a
     // move to its start and a draw to its end. Coordinates in the 2.6 format
@@ -93,8 +105,14 @@ fn the_via_becomes_a_hole_the_fabricator_will_drill() {
     let mut world = routed_board();
     let library = FootprintLibrary::new();
 
-    let drill = export_excellon(&mut world, &library, &CoordinateFormat::FORMAT_MM_2_6, None)
-        .expect("drill file");
+    let drill = export_excellon(
+        &mut world,
+        &library,
+        &CoordinateFormat::FORMAT_MM_2_6,
+        None,
+        cypcb_export::stamp::Stamp::UNIX_EPOCH,
+    )
+    .expect("drill file");
 
     assert!(
         drill.contains("T1C0.400000"),
@@ -160,8 +178,14 @@ fn an_inner_layer_carries_its_own_copper_and_nobody_else_s() {
     ];
 
     for (layer, own_y, name) in layers {
-        let gerber = export_copper_layer(&mut world, &library, layer, &format)
-            .unwrap_or_else(|e| panic!("{name} copper: {e:?}"));
+        let gerber = export_copper_layer(
+            &mut world,
+            &library,
+            layer,
+            &format,
+            cypcb_export::stamp::Stamp::UNIX_EPOCH,
+        )
+        .unwrap_or_else(|e| panic!("{name} copper: {e:?}"));
 
         assert!(
             gerber.contains(&format!("X5000000Y{own_y}D02*")),

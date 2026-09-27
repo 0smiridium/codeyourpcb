@@ -127,7 +127,14 @@ fn every_copper_file_flashes_every_via_that_has_copper_on_it() {
     let (mut world, library) = board(&all);
 
     for (position, layer) in STACK.iter().enumerate() {
-        let gerber = export_copper_layer(&mut world, &library, *layer, &FORMAT).unwrap();
+        let gerber = export_copper_layer(
+            &mut world,
+            &library,
+            *layer,
+            &FORMAT,
+            cypcb_export::stamp::Stamp::UNIX_EPOCH,
+        )
+        .unwrap();
         let flashes = gerber.lines().filter(|line| line.ends_with("D03*")).count();
         let expected = cases.iter().filter(|case| case.is_on(position)).count();
         assert_eq!(
@@ -154,7 +161,7 @@ fn every_ipc2581_layer_carries_the_vias_that_have_copper_on_it() {
             &mut world,
             &library,
             HouseTolerances::default(),
-            "2026-09-24T00:00:00Z",
+            cypcb_export::stamp::Stamp::UNIX_EPOCH,
         );
         let expected: Vec<String> = (0..STACK.len())
             .filter(|position| case.is_on(*position))
@@ -206,8 +213,14 @@ fn every_via_is_drilled_once_in_the_file_for_its_pair() {
             case.via.position.x.0 as f64 / 1e6,
             case.via.position.y.0 as f64 / 1e6
         );
-        let through =
-            export_excellon(&mut world, &library, &FORMAT, Some(DrillType::Plated)).unwrap();
+        let through = export_excellon(
+            &mut world,
+            &library,
+            &FORMAT,
+            Some(DrillType::Plated),
+            cypcb_export::stamp::Stamp::UNIX_EPOCH,
+        )
+        .unwrap();
         let spans = non_through_spans(&mut world, &library).unwrap();
         let label = format!("{:?} -> {:?}", case.via.start_layer, case.via.end_layer);
 
@@ -228,6 +241,7 @@ fn every_via_is_drilled_once_in_the_file_for_its_pair() {
             &FORMAT,
             Some(DrillType::Plated),
             spans[0],
+            cypcb_export::stamp::Stamp::UNIX_EPOCH,
         )
         .unwrap();
         let kind = if case.upper == 0 || case.lower == STACK.len() - 1 {

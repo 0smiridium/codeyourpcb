@@ -139,6 +139,7 @@ fn what_the_router_lays_is_what_the_fabricator_gets() {
             output_dir: dir.clone(),
             preset: cypcb_export::presets::from_name("jlcpcb").expect("the jlcpcb preset"),
             board_name: label.to_string(),
+            stamp: cypcb_export::stamp::Stamp::UNIX_EPOCH,
         };
         run_export(&job, &mut world, &library)
             .unwrap_or_else(|e| panic!("{} failed to export: {e:?}", benchmark.filename));

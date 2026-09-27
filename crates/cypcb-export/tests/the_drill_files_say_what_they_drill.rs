@@ -58,8 +58,14 @@ fn stated_function(drill: &str) -> String {
 }
 
 fn through(world: &mut BoardWorld, library: &FootprintLibrary, kind: DrillType) -> String {
-    export_excellon(world, library, &CoordinateFormat::FORMAT_MM_2_6, Some(kind))
-        .expect("the drill file exports")
+    export_excellon(
+        world,
+        library,
+        &CoordinateFormat::FORMAT_MM_2_6,
+        Some(kind),
+        cypcb_export::stamp::Stamp::UNIX_EPOCH,
+    )
+    .expect("the drill file exports")
 }
 
 #[test]
@@ -101,6 +107,7 @@ fn a_buried_via_says_which_two_layers_it_joins() {
         &CoordinateFormat::FORMAT_MM_2_6,
         Some(DrillType::Plated),
         (Layer::Inner(0), Layer::Inner(1)),
+        cypcb_export::stamp::Stamp::UNIX_EPOCH,
     )
     .expect("the span exports");
 
@@ -116,6 +123,7 @@ fn a_via_that_reaches_a_face_is_blind_rather_than_buried() {
         &CoordinateFormat::FORMAT_MM_2_6,
         Some(DrillType::Plated),
         (Layer::TopCopper, Layer::Inner(0)),
+        cypcb_export::stamp::Stamp::UNIX_EPOCH,
     )
     .expect("the span exports");
 

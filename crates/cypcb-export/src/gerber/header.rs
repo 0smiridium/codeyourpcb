@@ -149,7 +149,7 @@ impl GerberFileFunction {
 ///     &GerberFileFunction::Copper(CopperSide::Top, Some(1)),
 ///     "my_board",
 ///     &CoordinateFormat::FORMAT_MM_2_6,
-///     2,
+///     2, cypcb_export::stamp::Stamp::UNIX_EPOCH,
 /// );
 ///
 /// assert!(header.contains("TF.FileFunction,Copper,L1,Top"));
@@ -160,6 +160,7 @@ pub fn write_header(
     board_name: &str,
     format: &CoordinateFormat,
     total_layers: u8,
+    stamp: crate::stamp::Stamp,
 ) -> String {
     let mut header = String::new();
 
@@ -188,8 +189,7 @@ pub fn write_header(
     ));
 
     // TF.CreationDate
-    let now = crate::stamp::now();
-    let iso_date = now.format("%Y-%m-%dT%H:%M:%S%z").to_string();
+    let iso_date = stamp.format("%Y-%m-%dT%H:%M:%S%z").to_string();
     header.push_str(&format!("G04 #@! TF.CreationDate,{}*\n", iso_date));
 
     // TF.FileFunction
@@ -279,6 +279,7 @@ mod tests {
             "test_board",
             &format,
             2,
+            crate::stamp::Stamp::UNIX_EPOCH,
         );
 
         assert!(header.contains("%FSLAX26Y26*%"));
@@ -293,6 +294,7 @@ mod tests {
             "test_board",
             &format,
             2,
+            crate::stamp::Stamp::UNIX_EPOCH,
         );
 
         assert!(header.contains("TF.GenerationSoftware,CodeYourPCB"));
@@ -309,6 +311,7 @@ mod tests {
             "my_awesome_board",
             &format,
             2,
+            crate::stamp::Stamp::UNIX_EPOCH,
         );
 
         assert!(header.contains("Board: my_awesome_board"));
@@ -322,6 +325,7 @@ mod tests {
             "test",
             &format,
             2,
+            crate::stamp::Stamp::UNIX_EPOCH,
         );
 
         assert!(header.contains("%FSLAX24Y24*%"));

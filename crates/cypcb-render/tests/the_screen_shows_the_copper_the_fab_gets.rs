@@ -128,6 +128,7 @@ fn the_viewer_and_the_gerber_are_given_the_same_rectangles() {
         &library,
         cypcb_world::Layer::TopCopper,
         &cypcb_export::coords::CoordinateFormat::FORMAT_MM_2_6,
+        cypcb_export::stamp::Stamp::UNIX_EPOCH,
     )
     .expect("the top copper layer exports");
 

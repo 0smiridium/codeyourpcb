@@ -105,6 +105,7 @@ fn exported(who: &str) -> (cypcb_fixtures::ScratchPath, Vec<String>) {
         output_dir: output_dir.to_path_buf(),
         preset,
         board_name: "bracket".to_string(),
+        stamp: cypcb_export::stamp::Stamp::UNIX_EPOCH,
     };
     let result = run_export(&job, &mut world, &library).expect("the export runs");
     let names = result
@@ -262,6 +263,7 @@ fn the_example_board_still_has_its_holes() {
         output_dir: output_dir.to_path_buf(),
         preset,
         board_name: "panel-mount".to_string(),
+        stamp: cypcb_export::stamp::Stamp::UNIX_EPOCH,
     };
     let exported = run_export(&job, &mut world, &library).expect("the export runs");
 

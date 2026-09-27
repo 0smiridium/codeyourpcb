@@ -66,6 +66,7 @@ fn mask_of(margin: Option<Nm>) -> String {
         Side::Top,
         &CoordinateFormat::FORMAT_MM_2_6,
         &MaskPasteConfig::default(),
+        cypcb_export::stamp::Stamp::UNIX_EPOCH,
     )
     .expect("the mask exports")
 }

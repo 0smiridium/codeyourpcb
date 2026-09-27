@@ -1,9 +1,12 @@
 //! The moment an export says it was written.
 //!
-//! Every stamped file takes its time from [`export_time`] and from nowhere
-//! else: a gerber's and a drill file's `TF.CreationDate`, the job file's
-//! `CreationDate`, the assembly JSON's `export_date` and an IPC-2581
-//! document's `origination`.
+//! Every stamped file carries one [`Stamp`]: a gerber's and a drill file's
+//! `TF.CreationDate`, the job file's `CreationDate`, the assembly JSON's
+//! `export_date` and an IPC-2581 document's `origination`. A writer takes the
+//! stamp as an argument, or from [`crate::ExportJob`], and reads neither the
+//! clock nor the environment, so a writer called on its own has no way to
+//! fail on the variable. The way in, the CLI, reads the time once with
+//! [`export_time`] and stops on a bad value before a file is written.
 //!
 //! With `SOURCE_DATE_EPOCH` set, the time is the variable's, so two exports of
 //! one board are the same bytes. The variable is defined by the
@@ -22,6 +25,9 @@ use std::ffi::OsStr;
 
 use chrono::{DateTime, Utc};
 
+/// The time an export says it was written.
+pub type Stamp = DateTime<Utc>;
+
 /// The variable an export takes its time from when it is set.
 pub const VARIABLE: &str = "SOURCE_DATE_EPOCH";
 
@@ -37,18 +43,8 @@ pub struct StampError {
 
 /// The time every file of an export carries: `SOURCE_DATE_EPOCH` when it is
 /// set, the clock when it is not.
-pub fn export_time() -> Result<DateTime<Utc>, StampError> {
+pub fn export_time() -> Result<Stamp, StampError> {
     Ok(from_value(std::env::var_os(VARIABLE).as_deref())?.unwrap_or_else(Utc::now))
-}
-
-/// [`export_time`] for a writer that returns no `Result`.
-///
-/// Each way into the exporters checks the variable first and stops with a
-/// [`StampError`], so a writer reached through one never sees a bad value. A
-/// writer called on its own with a bad value stops here with the same
-/// message rather than writing the clock's time.
-pub(crate) fn now() -> DateTime<Utc> {
-    export_time().unwrap_or_else(|e| panic!("{e}"))
 }
 
 /// The time `value` names, or `None` when the variable is not set.

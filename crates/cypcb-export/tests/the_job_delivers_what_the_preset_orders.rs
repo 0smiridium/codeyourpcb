@@ -116,6 +116,7 @@ fn every_layer_the_preset_asks_for_is_written() {
         output_dir: output_dir.clone(),
         preset: preset.clone(),
         board_name: "delivery".to_string(),
+        stamp: cypcb_export::stamp::Stamp::UNIX_EPOCH,
     };
 
     let exported = run_export(&job, &mut world, &library).expect("the export runs");
@@ -185,6 +186,7 @@ fn an_unrouted_board_says_so_and_a_routed_one_does_not() {
             output_dir: output_dir.clone(),
             preset: preset.clone(),
             board_name: "delivery".to_string(),
+            stamp: cypcb_export::stamp::Stamp::UNIX_EPOCH,
         };
         let result = run_export(&job, world, &library).expect("the export runs");
         let _ = std::fs::remove_dir_all(&output_dir);
@@ -239,6 +241,7 @@ fn the_legend_prints_the_names_of_the_parts_it_labels() {
         GerberSide::Top,
         &format,
         &SilkConfig::default(),
+        cypcb_export::stamp::Stamp::UNIX_EPOCH,
     )
     .expect("top silkscreen");
 
@@ -295,6 +298,7 @@ fn a_pour_that_is_drawn_correctly_is_not_warned_about() {
         output_dir: output_dir.clone(),
         preset,
         board_name: "pour".to_string(),
+        stamp: cypcb_export::stamp::Stamp::UNIX_EPOCH,
     };
     let result = run_export(&job, &mut world, &library).expect("the export runs");
     let _ = std::fs::remove_dir_all(&output_dir);
@@ -310,9 +314,14 @@ fn a_pour_that_is_drawn_correctly_is_not_warned_about() {
 
     // And the pour itself reaches the copper layer, which is why.
     let format = cypcb_export::coords::CoordinateFormat::FORMAT_MM_2_6;
-    let copper =
-        cypcb_export::gerber::export_copper_layer(&mut world, &library, Layer::TopCopper, &format)
-            .expect("top copper");
+    let copper = cypcb_export::gerber::export_copper_layer(
+        &mut world,
+        &library,
+        Layer::TopCopper,
+        &format,
+        cypcb_export::stamp::Stamp::UNIX_EPOCH,
+    )
+    .expect("top copper");
     assert!(
         copper.contains("G36*") && copper.contains("G37*"),
         "a declared pour has to be filled:\n{copper}"
@@ -348,6 +357,7 @@ fn a_pour_keeps_clear_of_other_nets_and_reaches_its_own() {
         &format,
         &cypcb_export::pour::PourOptions::default(),
         None,
+        cypcb_export::stamp::Stamp::UNIX_EPOCH,
     )
     .expect("top copper");
 
@@ -472,6 +482,7 @@ fn the_relief_a_pour_cuts_is_the_one_the_preset_asks_for() {
             output_dir,
             preset,
             board_name: "delivery".to_string(),
+            stamp: cypcb_export::stamp::Stamp::UNIX_EPOCH,
         };
         let exported = run_export(&job, &mut world, &library).expect("the export runs");
         let top = exported
