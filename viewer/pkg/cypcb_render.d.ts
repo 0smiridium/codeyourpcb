@@ -167,6 +167,21 @@ export class PcbEngine {
      */
     load_kicad(source: string): string;
     /**
+     * Put the routes of a Specctra session file on the board.
+     *
+     * The routes a server router sent back, or a `.ses` file the user opened,
+     * used to go into the viewer's copy of the board only: the engine never
+     * held them, so the ratsnest was worked out a second time in TypeScript
+     * and the checker did not see the copper at all. They now land in the
+     * world, as the FreeRouting runner puts them there, and the ratsnest and
+     * the violations come back from the engine like any other copper. The
+     * host writes them into the design with `export_traces_as_dsl`.
+     *
+     * Autorouted copper already on the board is cleared first. Returns an
+     * empty string on success, or what went wrong.
+     */
+    load_ses(ses: string): string;
+    /**
      * Load a pre-parsed board snapshot (WASM mode).
      *
      * This method receives a BoardSnapshot that was parsed in JavaScript
@@ -320,6 +335,7 @@ export interface InitOutput {
     readonly pcbengine_get_trace_at_point: (a: number, b: bigint, c: bigint, d: bigint) => number;
     readonly pcbengine_get_violations_json: (a: number, b: number) => void;
     readonly pcbengine_load_kicad: (a: number, b: number, c: number, d: number) => void;
+    readonly pcbengine_load_ses: (a: number, b: number, c: number, d: number) => void;
     readonly pcbengine_load_snapshot: (a: number, b: number, c: number) => void;
     readonly pcbengine_load_source: (a: number, b: number, c: number, d: number) => void;
     readonly pcbengine_load_source_with_imports: (a: number, b: number, c: number, d: number, e: number, f: number) => void;

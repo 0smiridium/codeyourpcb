@@ -18,6 +18,7 @@ export const pcbengine_get_snapshot: (a: number) => number;
 export const pcbengine_get_trace_at_point: (a: number, b: bigint, c: bigint, d: bigint) => number;
 export const pcbengine_get_violations_json: (a: number, b: number) => void;
 export const pcbengine_load_kicad: (a: number, b: number, c: number, d: number) => void;
+export const pcbengine_load_ses: (a: number, b: number, c: number, d: number) => void;
 export const pcbengine_load_snapshot: (a: number, b: number, c: number) => void;
 export const pcbengine_load_source: (a: number, b: number, c: number, d: number) => void;
 export const pcbengine_load_source_with_imports: (a: number, b: number, c: number, d: number, e: number, f: number) => void;

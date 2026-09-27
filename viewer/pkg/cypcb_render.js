@@ -402,6 +402,40 @@ export class PcbEngine {
         }
     }
     /**
+     * Put the routes of a Specctra session file on the board.
+     *
+     * The routes a server router sent back, or a `.ses` file the user opened,
+     * used to go into the viewer's copy of the board only: the engine never
+     * held them, so the ratsnest was worked out a second time in TypeScript
+     * and the checker did not see the copper at all. They now land in the
+     * world, as the FreeRouting runner puts them there, and the ratsnest and
+     * the violations come back from the engine like any other copper. The
+     * host writes them into the design with `export_traces_as_dsl`.
+     *
+     * Autorouted copper already on the board is cleared first. Returns an
+     * empty string on success, or what went wrong.
+     * @param {string} ses
+     * @returns {string}
+     */
+    load_ses(ses) {
+        let deferred2_0;
+        let deferred2_1;
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passStringToWasm0(ses, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len0 = WASM_VECTOR_LEN;
+            wasm.pcbengine_load_ses(retptr, this.__wbg_ptr, ptr0, len0);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            deferred2_0 = r0;
+            deferred2_1 = r1;
+            return getStringFromWasm0(r0, r1);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+            wasm.__wbindgen_export4(deferred2_0, deferred2_1, 1);
+        }
+    }
+    /**
      * Load a pre-parsed board snapshot (WASM mode).
      *
      * This method receives a BoardSnapshot that was parsed in JavaScript

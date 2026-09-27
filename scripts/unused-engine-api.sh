@@ -23,7 +23,11 @@ set -euo pipefail
 
 # Engine methods no code in `viewer/src` reaches, counted on 2026-09-05.
 # Only a person moves this number, and only in the commit that moves the code.
-BASELINE=11
+# 12 since 2026-09-27: the viewer's `load_routes` was its own reader of `.ses`
+# files and matched the native `.routes` loader by name only. The session file
+# now goes through the engine's `load_ses`, and `load_routes` shows as what it
+# always was, a loader the browser never calls.
+BASELINE=12
 
 cd "$(dirname "$0")/.."
 

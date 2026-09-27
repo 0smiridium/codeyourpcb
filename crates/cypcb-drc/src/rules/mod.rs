@@ -118,7 +118,7 @@ pub use impedance::ImpedanceRule;
 pub use land_outside_courtyard::LandOutsideCourtyardRule;
 pub use mounting_hole_clearance::MountingHoleClearanceRule;
 pub use neck_down::NeckDownRule;
-pub use net_split::NetSplitRule;
+pub use net_split::{copper_pieces, CopperPiece, NetCopper, NetSplitRule, PiecePin, PieceSegment};
 pub use pad_entry::PadEntryRule;
 pub use pad_land::PadLandRule;
 pub use paste_clearance::PasteClearanceRule;

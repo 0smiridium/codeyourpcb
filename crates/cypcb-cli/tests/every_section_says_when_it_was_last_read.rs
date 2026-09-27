@@ -2587,6 +2587,23 @@ const VERIFICATION_TOOLS: &[&str] = &[
 
 const VERIFICATION_COMMANDS_FLOOR: usize = 46;
 
+/// `line` without the `N:` or `path:N:` that `grep -n` writes in front of it.
+fn without_line_number(line: &str) -> &str {
+    let numbered = |text: &str| -> Option<usize> {
+        let digits = text.bytes().take_while(u8::is_ascii_digit).count();
+        (digits > 0 && text.as_bytes().get(digits) == Some(&b':')).then_some(digits + 1)
+    };
+    if let Some(cut) = numbered(line) {
+        return &line[cut..];
+    }
+    if let Some(colon) = line.find(':') {
+        if let Some(cut) = numbered(&line[colon + 1..]) {
+            return &line[colon + 1 + cut..];
+        }
+    }
+    line
+}
+
 /// Figures this document states that its own verification blocks never print.
 /// Each comes from a standard, a vendor's page or one run of the router, and
 /// the legend says so - the blocks reach what the tree names, not what a figure
@@ -2670,7 +2687,13 @@ fn every_command_in_a_verification_block_still_runs() {
             .current_dir(&root)
             .output()
             .expect("a shell runs");
-        printed.push_str(&String::from_utf8_lossy(&output.stdout));
+        // A line number `grep -n` puts in front of a line is where the text
+        // sits, not a figure it states: `fn nets_needing_reroute` moving to
+        // line 1500 read as the canon's 1500 points turning up in a block.
+        for line in String::from_utf8_lossy(&output.stdout).lines() {
+            printed.push_str(without_line_number(line));
+            printed.push('\n');
+        }
         if output.status.code() == Some(2) {
             broken.push(format!(
                 "{command}\n    {}",
