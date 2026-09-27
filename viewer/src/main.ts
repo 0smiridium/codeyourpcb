@@ -82,6 +82,13 @@ function getWsUrl(): string {
 const WS_URL = getWsUrl();
 
 /**
+ * How long the editor waits after the last keystroke before it loads the
+ * text into the engine. `docs/api/lsp-server.md` quotes this number, and
+ * `the_editor_timings_are_measured` reads it here.
+ */
+const EDITOR_SYNC_DEBOUNCE_MS = 300;
+
+/**
  * WebSocket message types from the dev server
  */
 interface WsMessage {
@@ -1299,7 +1306,7 @@ async function init(): Promise<void> {
         return;
       }
 
-      // Debounce for 300ms
+      // Wait for the typing to stop
       if (debounceTimer !== null) {
         clearTimeout(debounceTimer);
       }
@@ -1345,10 +1352,10 @@ async function init(): Promise<void> {
         });
 
         debounceTimer = null;
-      }, 300);
+      }, EDITOR_SYNC_DEBOUNCE_MS);
     });
 
-    console.log('[Editor] Sync wired up with 300ms debounce');
+    console.log(`[Editor] Sync wired up with ${EDITOR_SYNC_DEBOUNCE_MS}ms debounce`);
   }
 
   // Fit board to viewport button
