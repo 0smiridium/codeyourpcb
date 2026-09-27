@@ -95,6 +95,7 @@ fn export_to_temp(
         output_dir: dir.to_path_buf(),
         preset,
         board_name: name.trim_end_matches(".cypcb").to_string(),
+        stamp: cypcb_export::stamp::Stamp::UNIX_EPOCH,
     };
     let result = run_export(&job, world, library)
         .unwrap_or_else(|e| panic!("{name} failed to export: {e:?}"));

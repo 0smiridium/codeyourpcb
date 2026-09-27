@@ -161,6 +161,7 @@ fn the_hole_is_in_the_unplated_drill_file_and_not_the_plated_one() {
         &result.library,
         &format,
         Some(DrillType::Plated),
+        cypcb_export::stamp::Stamp::UNIX_EPOCH,
     )
     .expect("a plated drill file");
     let unplated = export_excellon(
@@ -168,6 +169,7 @@ fn the_hole_is_in_the_unplated_drill_file_and_not_the_plated_one() {
         &result.library,
         &format,
         Some(DrillType::NonPlated),
+        cypcb_export::stamp::Stamp::UNIX_EPOCH,
     )
     .expect("an unplated drill file");
 
@@ -202,8 +204,14 @@ fn no_copper_layer_flashes_a_pad_at_the_mounting_hole() {
     let format = CoordinateFormat::FORMAT_MM_2_6;
 
     for layer in [Layer::TopCopper, Layer::BottomCopper] {
-        let gerber = export_copper_layer(&mut result.world, &result.library, layer, &format)
-            .unwrap_or_else(|e| panic!("{layer:?} copper: {e:?}"));
+        let gerber = export_copper_layer(
+            &mut result.world,
+            &result.library,
+            layer,
+            &format,
+            cypcb_export::stamp::Stamp::UNIX_EPOCH,
+        )
+        .unwrap_or_else(|e| panic!("{layer:?} copper: {e:?}"));
 
         // 2.6 format: six implied decimals, no point.
         let flashes: Vec<(f64, f64)> = gerber
@@ -291,6 +299,7 @@ fn the_export_job_writes_the_unplated_file_every_preset_already_named() {
         output_dir: output_dir.clone(),
         preset: preset.clone(),
         board_name: "mounting".to_string(),
+        stamp: cypcb_export::stamp::Stamp::UNIX_EPOCH,
     };
     let exported = run_export(&job, &mut result.world, &result.library).expect("the export runs");
 

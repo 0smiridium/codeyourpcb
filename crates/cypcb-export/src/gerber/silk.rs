@@ -112,7 +112,7 @@ pub struct SilkWarning {
 /// let format = CoordinateFormat::FORMAT_MM_2_6;
 /// let config = SilkConfig::default();
 ///
-/// let gerber = export_silkscreen(&mut world, &library, Side::Top, &format, &config).unwrap();
+/// let gerber = export_silkscreen(&mut world, &library, Side::Top, &format, &config, cypcb_export::stamp::Stamp::UNIX_EPOCH).unwrap();
 /// assert!(gerber.contains("TF.FileFunction,Legend,Top"));
 /// assert!(gerber.contains("M02*")); // End of file
 /// ```
@@ -122,8 +122,10 @@ pub fn export_silkscreen(
     side: Side,
     format: &CoordinateFormat,
     config: &SilkConfig,
+    stamp: crate::stamp::Stamp,
 ) -> Result<String, SilkError> {
-    export_silkscreen_reporting(world, library, side, format, config).map(|(gerber, _)| gerber)
+    export_silkscreen_reporting(world, library, side, format, config, stamp)
+        .map(|(gerber, _)| gerber)
 }
 
 /// The same export, plus the names it could not print in full.
@@ -137,6 +139,7 @@ pub fn export_silkscreen_reporting(
     side: Side,
     format: &CoordinateFormat,
     config: &SilkConfig,
+    stamp: crate::stamp::Stamp,
 ) -> Result<(String, Vec<SilkWarning>), SilkError> {
     let mut output = String::new();
     let mut apertures = ApertureManager::new();
@@ -151,6 +154,7 @@ pub fn export_silkscreen_reporting(
         board_name,
         format,
         total_layers,
+        stamp,
     ));
 
     // Collect drawing commands
@@ -543,7 +547,15 @@ mod tests {
 
         let format = CoordinateFormat::FORMAT_MM_2_6;
         let config = SilkConfig::default();
-        let gerber = export_silkscreen(&mut world, &library, Side::Top, &format, &config).unwrap();
+        let gerber = export_silkscreen(
+            &mut world,
+            &library,
+            Side::Top,
+            &format,
+            &config,
+            crate::stamp::Stamp::UNIX_EPOCH,
+        )
+        .unwrap();
 
         // Check header
         assert!(gerber.contains("TF.FileFunction,Legend,Top"));
@@ -562,8 +574,15 @@ mod tests {
         let format = CoordinateFormat::FORMAT_MM_2_6;
         let config = SilkConfig::default();
 
-        let gerber =
-            export_silkscreen(&mut world, &library, Side::Bottom, &format, &config).unwrap();
+        let gerber = export_silkscreen(
+            &mut world,
+            &library,
+            Side::Bottom,
+            &format,
+            &config,
+            crate::stamp::Stamp::UNIX_EPOCH,
+        )
+        .unwrap();
 
         // Check header for bottom side
         assert!(gerber.contains("TF.FileFunction,Legend,Bot"));
@@ -588,7 +607,15 @@ mod tests {
 
         let format = CoordinateFormat::FORMAT_MM_2_6;
         let config = SilkConfig::default();
-        let gerber = export_silkscreen(&mut world, &library, Side::Top, &format, &config).unwrap();
+        let gerber = export_silkscreen(
+            &mut world,
+            &library,
+            Side::Top,
+            &format,
+            &config,
+            crate::stamp::Stamp::UNIX_EPOCH,
+        )
+        .unwrap();
 
         // Should contain drawing commands for crosshair and courtyard
         assert!(gerber.contains("D01*")); // Draw commands present
@@ -611,7 +638,15 @@ mod tests {
         let format = CoordinateFormat::FORMAT_MM_2_6;
         let config = SilkConfig::default();
 
-        let gerber = export_silkscreen(&mut world, &library, Side::Top, &format, &config).unwrap();
+        let gerber = export_silkscreen(
+            &mut world,
+            &library,
+            Side::Top,
+            &format,
+            &config,
+            crate::stamp::Stamp::UNIX_EPOCH,
+        )
+        .unwrap();
 
         // Should define aperture for line width
         assert!(gerber.contains("%ADD10C,0.150000*%")); // 0.15mm circular aperture
@@ -661,15 +696,29 @@ mod tests {
         let config = SilkConfig::default();
 
         // Export top silkscreen - should NOT include bottom-only component
-        let gerber_top =
-            export_silkscreen(&mut world, &library, Side::Top, &format, &config).unwrap();
+        let gerber_top = export_silkscreen(
+            &mut world,
+            &library,
+            Side::Top,
+            &format,
+            &config,
+            crate::stamp::Stamp::UNIX_EPOCH,
+        )
+        .unwrap();
         // Check that there are no drawing commands (only header and end)
         let draw_count_top = gerber_top.matches("D01*").count();
         assert_eq!(draw_count_top, 0); // No draw commands for bottom component on top silk
 
         // Export bottom silkscreen - should include bottom component
-        let gerber_bottom =
-            export_silkscreen(&mut world, &library, Side::Bottom, &format, &config).unwrap();
+        let gerber_bottom = export_silkscreen(
+            &mut world,
+            &library,
+            Side::Bottom,
+            &format,
+            &config,
+            crate::stamp::Stamp::UNIX_EPOCH,
+        )
+        .unwrap();
         let draw_count_bottom = gerber_bottom.matches("D01*").count();
         assert!(draw_count_bottom > 0); // Has draw commands for bottom component
     }

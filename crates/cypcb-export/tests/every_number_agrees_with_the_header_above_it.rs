@@ -119,10 +119,20 @@ fn no_gerber_coordinate_carries_a_decimal_point() {
     let files = [
         (
             "copper",
-            export_copper_layer(&mut world, &library, Layer::TopCopper, &format)
-                .expect("top copper"),
+            export_copper_layer(
+                &mut world,
+                &library,
+                Layer::TopCopper,
+                &format,
+                cypcb_export::stamp::Stamp::UNIX_EPOCH,
+            )
+            .expect("top copper"),
         ),
-        ("outline", export_outline(&world, &format).expect("outline")),
+        (
+            "outline",
+            export_outline(&world, &format, cypcb_export::stamp::Stamp::UNIX_EPOCH)
+                .expect("outline"),
+        ),
     ];
 
     for (what, gerber) in &files {
@@ -161,8 +171,14 @@ fn no_gerber_coordinate_carries_a_decimal_point() {
 fn an_aperture_definition_keeps_its_decimal_point() {
     let (mut world, library) = board();
     let format = CoordinateFormat::FORMAT_MM_2_6;
-    let gerber =
-        export_copper_layer(&mut world, &library, Layer::TopCopper, &format).expect("top copper");
+    let gerber = export_copper_layer(
+        &mut world,
+        &library,
+        Layer::TopCopper,
+        &format,
+        cypcb_export::stamp::Stamp::UNIX_EPOCH,
+    )
+    .expect("top copper");
 
     let apertures: Vec<&str> = gerber
         .lines()
@@ -198,7 +214,14 @@ fn an_aperture_definition_keeps_its_decimal_point() {
 fn a_drill_file_keeps_its_decimal_point() {
     let (mut world, library) = board();
     let format = CoordinateFormat::FORMAT_MM_2_6;
-    let drill = export_excellon(&mut world, &library, &format, None).expect("drill file");
+    let drill = export_excellon(
+        &mut world,
+        &library,
+        &format,
+        None,
+        cypcb_export::stamp::Stamp::UNIX_EPOCH,
+    )
+    .expect("drill file");
 
     assert!(
         drill.contains("METRIC"),

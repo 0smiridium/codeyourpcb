@@ -21,6 +21,7 @@
 //!     output_dir: PathBuf::from("output"),
 //!     preset,
 //!     board_name: "board".to_string(),
+//!     stamp: cypcb_export::stamp::Stamp::UNIX_EPOCH,
 //! };
 //!
 //! let result = run_export(&job, &mut world, &library).unwrap();
@@ -57,6 +58,10 @@ pub struct ExportJob {
     pub preset: ExportPreset,
     /// Board name (used for file naming)
     pub board_name: String,
+    /// The time every file of the set carries. The caller reads it once,
+    /// from [`crate::stamp::export_time`] or as a fixed value, and each
+    /// writer takes it from here: none reads the clock or the environment.
+    pub stamp: crate::stamp::Stamp,
 }
 
 /// Result of an export job.
@@ -95,9 +100,6 @@ pub enum ExportError {
 
     #[error("Export failed: {0}")]
     Export(String),
-
-    #[error(transparent)]
-    Stamp(#[from] crate::stamp::StampError),
 }
 
 /// How a pour is filled for this job's fabricator.
@@ -160,8 +162,6 @@ pub fn run_export_with(
     library: &FootprintLibrary,
     teardrops: Option<cypcb_world::teardrop::TeardropRatios>,
 ) -> Result<ExportResult, ExportError> {
-    // A bad `SOURCE_DATE_EPOCH` stops the export before it writes a file.
-    crate::stamp::export_time()?;
     let start = Instant::now();
     let mut files = Vec::new();
     let mut warnings = Vec::new();
@@ -188,6 +188,7 @@ pub fn run_export_with(
             &job.preset.coordinate_format,
             &pour_options(job),
             teardrops,
+            job.stamp,
         )
         .map_err(|e| ExportError::Export(format!("{:?}", e)))?;
         let file = write_export_file(&path, &content, "Top Copper")?;
@@ -204,6 +205,7 @@ pub fn run_export_with(
             &job.preset.coordinate_format,
             &pour_options(job),
             teardrops,
+            job.stamp,
         )
         .map_err(|e| ExportError::Export(format!("{:?}", e)))?;
         let file = write_export_file(&path, &content, "Bottom Copper")?;
@@ -235,6 +237,7 @@ pub fn run_export_with(
             &job.preset.coordinate_format,
             &pour_options(job),
             teardrops,
+            job.stamp,
         )
         .map_err(|e| ExportError::Export(format!("{:?}", e)))?;
         let file = write_export_file(&path, &content, &format!("Inner Copper {number}"))?;
@@ -255,6 +258,7 @@ pub fn run_export_with(
             Side::Top,
             &job.preset.coordinate_format,
             &config,
+            job.stamp,
         )
         .map_err(|e| ExportError::Export(format!("{:?}", e)))?;
         let file = write_export_file(&path, &content, "Top Soldermask")?;
@@ -275,6 +279,7 @@ pub fn run_export_with(
             Side::Bottom,
             &job.preset.coordinate_format,
             &config,
+            job.stamp,
         )
         .map_err(|e| ExportError::Export(format!("{:?}", e)))?;
         let file = write_export_file(&path, &content, "Bottom Soldermask")?;
@@ -291,6 +296,7 @@ pub fn run_export_with(
             Side::Top,
             &job.preset.coordinate_format,
             &config,
+            job.stamp,
         )
         .map_err(|e| ExportError::Export(format!("{:?}", e)))?;
         let file = write_export_file(&path, &content, "Top Solderpaste")?;
@@ -307,6 +313,7 @@ pub fn run_export_with(
             Side::Bottom,
             &job.preset.coordinate_format,
             &config,
+            job.stamp,
         )
         .map_err(|e| ExportError::Export(format!("{:?}", e)))?;
         let file = write_export_file(&path, &content, "Bottom Solderpaste")?;
@@ -326,6 +333,7 @@ pub fn run_export_with(
             Side::Top,
             &job.preset.coordinate_format,
             &config,
+            job.stamp,
         )
         .map_err(|e| ExportError::Export(format!("{:?}", e)))?;
         let file = write_export_file(&path, &content, "Top Silkscreen")?;
@@ -346,6 +354,7 @@ pub fn run_export_with(
             Side::Bottom,
             &job.preset.coordinate_format,
             &config,
+            job.stamp,
         )
         .map_err(|e| ExportError::Export(format!("{:?}", e)))?;
         let file = write_export_file(&path, &content, "Bottom Silkscreen")?;
@@ -356,7 +365,7 @@ pub fn run_export_with(
     if job.preset.layers.outline {
         let filename = format!("{}{}", job.board_name, job.preset.file_naming.outline);
         let path = gerber_dir.join(&filename);
-        let content = export_outline(world, &job.preset.coordinate_format)
+        let content = export_outline(world, &job.preset.coordinate_format, job.stamp)
             .map_err(|e| ExportError::Export(format!("{:?}", e)))?;
         let file = write_export_file(&path, &content, "Board Outline")?;
         files.push(file);
@@ -371,6 +380,7 @@ pub fn run_export_with(
             library,
             &job.preset.coordinate_format,
             Some(DrillType::Plated),
+            job.stamp,
         )
         .map_err(|e| ExportError::Export(format!("{:?}", e)))?;
         let file = write_export_file(&path, &content, "Drill PTH")?;
@@ -390,6 +400,7 @@ pub fn run_export_with(
             library,
             &job.preset.coordinate_format,
             Some(DrillType::NonPlated),
+            job.stamp,
         )
         .map_err(|e| ExportError::Export(format!("{:?}", e)))?;
         if npth.lines().any(|line| line.starts_with('X')) {
@@ -421,6 +432,7 @@ pub fn run_export_with(
                 &job.preset.coordinate_format,
                 Some(DrillType::Plated),
                 (start, end),
+                job.stamp,
             )
             .map_err(|e| ExportError::Export(format!("{:?}", e)))?;
             let file = write_export_file(&path, &content, &format!("Drill {pair}"))?;
@@ -440,7 +452,7 @@ pub fn run_export_with(
         // BOM JSON
         let filename = format!("{}.json", job.board_name);
         let path = assembly_dir.join(&filename);
-        let content = export_bom_json(world, Some(&job.board_name))
+        let content = export_bom_json(world, Some(&job.board_name), job.stamp)
             .map_err(|e| ExportError::Export(format!("{:?}", e)))?;
         let file = write_export_file(&path, &content, "BOM JSON")?;
         files.push(file);
@@ -603,8 +615,13 @@ pub fn run_export_with(
         .collect();
     if !described.is_empty() {
         let borrowed: Vec<&Path> = described.iter().map(PathBuf::as_path).collect();
-        let content =
-            crate::jobfile::build_job_file(world, &job.board_name, &borrowed, &job.output_dir);
+        let content = crate::jobfile::build_job_file(
+            world,
+            &job.board_name,
+            &borrowed,
+            &job.output_dir,
+            job.stamp,
+        );
         // At the root of the set rather than inside `gerber/`: it describes
         // the drill files too, and a path written from inside one subdirectory
         // cannot name a file in another without climbing out of it.
@@ -674,6 +691,7 @@ mod tests {
             output_dir: PathBuf::from("target/test-export"),
             preset,
             board_name: "test".to_string(),
+            stamp: crate::stamp::Stamp::UNIX_EPOCH,
         };
 
         assert_eq!(job.board_name, "test");
@@ -692,6 +710,7 @@ mod tests {
             output_dir: temp_dir.clone(),
             preset,
             board_name: "test".to_string(),
+            stamp: crate::stamp::Stamp::UNIX_EPOCH,
         };
 
         let _result = run_export(&job, &mut world, &library).unwrap();
@@ -717,6 +736,7 @@ mod tests {
             output_dir: temp_dir.clone(),
             preset,
             board_name: "test".to_string(),
+            stamp: crate::stamp::Stamp::UNIX_EPOCH,
         };
 
         let result = run_export(&job, &mut world, &library).unwrap();
@@ -745,6 +765,7 @@ mod tests {
             output_dir: temp_dir.clone(),
             preset,
             board_name: "test".to_string(),
+            stamp: crate::stamp::Stamp::UNIX_EPOCH,
         };
 
         let started = std::time::Instant::now();

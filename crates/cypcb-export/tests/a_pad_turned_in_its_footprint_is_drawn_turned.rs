@@ -70,31 +70,41 @@ fn board(part: Rotation, pad: Rotation) -> (BoardWorld, FootprintLibrary) {
 /// Every file this board is drawn in, by name.
 fn files(part: Rotation, pad: Rotation) -> Vec<(&'static str, String)> {
     let (mut world, library) = board(part, pad);
-    let copper = export_copper_layer(&mut world, &library, Layer::TopCopper, &FORMAT).unwrap();
-    let copper = without_timestamp(&copper);
+    let copper = export_copper_layer(
+        &mut world,
+        &library,
+        Layer::TopCopper,
+        &FORMAT,
+        cypcb_export::stamp::Stamp::UNIX_EPOCH,
+    )
+    .unwrap();
     let svg = svg::plot_layer(&mut world, &library, Layer::TopCopper);
     let pdf = pdf::plot_layer(&mut world, &library, Layer::TopCopper);
     let dxf = dxf::plot_layer(&mut world, &library, Layer::TopCopper);
-    let (ipc2581, _) = export_ipc2581(&mut world, &library, HouseTolerances::default(), "T");
+    let (ipc2581, _) = export_ipc2581(
+        &mut world,
+        &library,
+        HouseTolerances::default(),
+        cypcb_export::stamp::Stamp::UNIX_EPOCH,
+    );
     let (ipc356, _) = export_ipc356(&mut world, &library, "t");
-    let drill = export_excellon(&mut world, &library, &FORMAT, None).unwrap();
+    let drill = export_excellon(
+        &mut world,
+        &library,
+        &FORMAT,
+        None,
+        cypcb_export::stamp::Stamp::UNIX_EPOCH,
+    )
+    .unwrap();
     vec![
         ("gerber copper", copper),
         ("svg", svg),
         ("pdf", pdf),
         ("dxf", dxf),
         ("ipc2581", ipc2581),
-        ("ipc356", without_timestamp(&ipc356)),
-        ("drill", without_timestamp(&drill)),
+        ("ipc356", ipc356),
+        ("drill", drill),
     ]
-}
-
-/// The file with every line that states when it was written taken out.
-fn without_timestamp(file: &str) -> String {
-    file.lines()
-        .filter(|l| !l.contains("CreationDate") && !l.contains("DATE"))
-        .collect::<Vec<_>>()
-        .join("\n")
 }
 
 #[test]

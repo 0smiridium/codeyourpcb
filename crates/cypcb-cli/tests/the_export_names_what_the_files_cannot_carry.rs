@@ -34,9 +34,7 @@ fn repo_root() -> PathBuf {
 }
 
 /// Everything a run of `export` left behind, keyed by the path under its output
-/// directory, with the timestamp lines dropped: every file this project writes
-/// carries the moment it was written, so two runs never compare equal without
-/// that.
+/// directory.
 fn files_written(dir: &std::path::Path) -> std::collections::BTreeMap<String, String> {
     let mut found = std::collections::BTreeMap::new();
     let mut stack = vec![dir.to_path_buf()];
@@ -55,12 +53,7 @@ fn files_written(dir: &std::path::Path) -> std::collections::BTreeMap<String, St
                 .unwrap_or(&path)
                 .to_string_lossy()
                 .to_string();
-            let stripped: String = text
-                .lines()
-                .filter(|line| !line.contains("CreationDate") && !line.contains("export_date"))
-                .collect::<Vec<_>>()
-                .join("\n");
-            found.insert(relative, stripped);
+            found.insert(relative, text);
         }
     }
     found
@@ -71,6 +64,8 @@ fn export(who: &str, example: &str) -> (cypcb_fixtures::ScratchPath, String) {
     let dir = dir_home.join("out");
 
     let output = Command::new(env!("CARGO_BIN_EXE_cypcb"))
+        // One fixed export time, so two exports compare byte for byte.
+        .env("SOURCE_DATE_EPOCH", "0")
         .args([
             "export",
             example,

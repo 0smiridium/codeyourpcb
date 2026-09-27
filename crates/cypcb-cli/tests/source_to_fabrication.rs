@@ -121,16 +121,30 @@ fn a_routed_board_survives_being_saved_and_reaches_the_gerbers() {
     reloaded.rebuild_spatial_index_from_library(&reloaded_library);
 
     let format = CoordinateFormat::FORMAT_MM_2_6;
-    let top = export_copper_layer(&mut reloaded, &reloaded_library, Layer::TopCopper, &format)
-        .expect("top copper");
+    let top = export_copper_layer(
+        &mut reloaded,
+        &reloaded_library,
+        Layer::TopCopper,
+        &format,
+        cypcb_export::stamp::Stamp::UNIX_EPOCH,
+    )
+    .expect("top copper");
     let bottom = export_copper_layer(
         &mut reloaded,
         &reloaded_library,
         Layer::BottomCopper,
         &format,
+        cypcb_export::stamp::Stamp::UNIX_EPOCH,
     )
     .expect("bottom copper");
-    let drill = export_excellon(&mut reloaded, &reloaded_library, &format, None).expect("drill");
+    let drill = export_excellon(
+        &mut reloaded,
+        &reloaded_library,
+        &format,
+        None,
+        cypcb_export::stamp::Stamp::UNIX_EPOCH,
+    )
+    .expect("drill");
 
     // Pads draw too, so copper has to be at least the routed segments - and a
     // polyline that joined a net's branches would push it over by inventing
@@ -165,10 +179,22 @@ fn saving_a_routed_board_does_not_change_how_much_copper_it_has() {
     world.rebuild_spatial_index_from_library(&library);
 
     let format = CoordinateFormat::FORMAT_MM_2_6;
-    let direct_top =
-        export_copper_layer(&mut world, &library, Layer::TopCopper, &format).expect("top copper");
-    let direct_bottom = export_copper_layer(&mut world, &library, Layer::BottomCopper, &format)
-        .expect("bottom copper");
+    let direct_top = export_copper_layer(
+        &mut world,
+        &library,
+        Layer::TopCopper,
+        &format,
+        cypcb_export::stamp::Stamp::UNIX_EPOCH,
+    )
+    .expect("top copper");
+    let direct_bottom = export_copper_layer(
+        &mut world,
+        &library,
+        Layer::BottomCopper,
+        &format,
+        cypcb_export::stamp::Stamp::UNIX_EPOCH,
+    )
+    .expect("bottom copper");
     let direct = draws(&direct_top) + draws(&direct_bottom);
 
     let saved = format!(
@@ -179,14 +205,20 @@ fn saving_a_routed_board_does_not_change_how_much_copper_it_has() {
     let (mut reloaded, reloaded_library) = load(&saved);
     reloaded.rebuild_spatial_index_from_library(&reloaded_library);
 
-    let reloaded_top =
-        export_copper_layer(&mut reloaded, &reloaded_library, Layer::TopCopper, &format)
-            .expect("top copper");
+    let reloaded_top = export_copper_layer(
+        &mut reloaded,
+        &reloaded_library,
+        Layer::TopCopper,
+        &format,
+        cypcb_export::stamp::Stamp::UNIX_EPOCH,
+    )
+    .expect("top copper");
     let reloaded_bottom = export_copper_layer(
         &mut reloaded,
         &reloaded_library,
         Layer::BottomCopper,
         &format,
+        cypcb_export::stamp::Stamp::UNIX_EPOCH,
     )
     .expect("bottom copper");
     let after_round_trip = draws(&reloaded_top) + draws(&reloaded_bottom);
@@ -238,7 +270,8 @@ fn the_fabricator_cuts_the_board_the_source_declared() {
     let (world, _library) = load(CUTOUT);
     let format = CoordinateFormat::FORMAT_MM_2_6;
 
-    let edge = export_outline(&world, &format).expect("board outline");
+    let edge = export_outline(&world, &format, cypcb_export::stamp::Stamp::UNIX_EPOCH)
+        .expect("board outline");
 
     // Six corners and back to the first: one pen-up, six draws.
     let moves = edge.lines().filter(|line| line.contains("D02")).count();
@@ -307,14 +340,21 @@ fn every_pad_gets_an_opening_in_the_soldermask() {
     let (mut world, library) = load(CUTOUT);
     let format = CoordinateFormat::FORMAT_MM_2_6;
 
-    let copper =
-        export_copper_layer(&mut world, &library, Layer::TopCopper, &format).expect("top copper");
+    let copper = export_copper_layer(
+        &mut world,
+        &library,
+        Layer::TopCopper,
+        &format,
+        cypcb_export::stamp::Stamp::UNIX_EPOCH,
+    )
+    .expect("top copper");
     let mask = export_soldermask(
         &mut world,
         &library,
         Side::Top,
         &format,
         &MaskPasteConfig::default(),
+        cypcb_export::stamp::Stamp::UNIX_EPOCH,
     )
     .expect("top soldermask");
 
@@ -345,14 +385,21 @@ fn the_paste_stencil_sits_on_the_pads_and_can_be_made_smaller_than_them() {
     let (mut world, library) = load(CUTOUT);
     let format = CoordinateFormat::FORMAT_MM_2_6;
 
-    let copper =
-        export_copper_layer(&mut world, &library, Layer::TopCopper, &format).expect("top copper");
+    let copper = export_copper_layer(
+        &mut world,
+        &library,
+        Layer::TopCopper,
+        &format,
+        cypcb_export::stamp::Stamp::UNIX_EPOCH,
+    )
+    .expect("top copper");
     let one_to_one = export_solderpaste(
         &mut world,
         &library,
         Side::Top,
         &format,
         &MaskPasteConfig::default(),
+        cypcb_export::stamp::Stamp::UNIX_EPOCH,
     )
     .expect("top paste");
 
@@ -368,6 +415,7 @@ fn the_paste_stencil_sits_on_the_pads_and_can_be_made_smaller_than_them() {
         Side::Top,
         &format,
         &MaskPasteConfig::default().with_paste_reduction(0.1),
+        cypcb_export::stamp::Stamp::UNIX_EPOCH,
     )
     .expect("top paste, reduced");
 
@@ -552,10 +600,24 @@ fn the_legend_puts_each_part_on_the_side_it_is_assembled_on() {
 
     let format = CoordinateFormat::FORMAT_MM_2_6;
     let config = SilkConfig::default();
-    let top = export_silkscreen(&mut world, &library, Side::Top, &format, &config)
-        .expect("top silkscreen");
-    let bottom = export_silkscreen(&mut world, &library, Side::Bottom, &format, &config)
-        .expect("bottom silkscreen");
+    let top = export_silkscreen(
+        &mut world,
+        &library,
+        Side::Top,
+        &format,
+        &config,
+        cypcb_export::stamp::Stamp::UNIX_EPOCH,
+    )
+    .expect("top silkscreen");
+    let bottom = export_silkscreen(
+        &mut world,
+        &library,
+        Side::Bottom,
+        &format,
+        &config,
+        cypcb_export::stamp::Stamp::UNIX_EPOCH,
+    )
+    .expect("bottom silkscreen");
 
     // R1 sits at 8mm, 8mm on top; R9 at 30mm, 20mm underneath. Each legend
     // draws around its own parts and not around the other side's.

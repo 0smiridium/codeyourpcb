@@ -32,11 +32,11 @@ const BOARDS: &[&str] = &["v2-constraints", "curved-track"];
 /// is about one in three hundred.
 const RUNS: usize = 16;
 
-/// Lines that carry the moment a file was written, which differ by design.
-const STAMPS: &[&str] = &["CreationDate", "export_date", "origination="];
-
 fn cypcb() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_cypcb"))
+    let mut command = Command::new(env!("CARGO_BIN_EXE_cypcb"));
+    // One fixed export time, so two runs compare byte for byte.
+    command.env("SOURCE_DATE_EPOCH", "0");
+    command
 }
 
 fn example(name: &str) -> PathBuf {
@@ -62,8 +62,7 @@ fn run(args: &[&std::ffi::OsStr]) {
     );
 }
 
-/// Every file under `dir`, as a path relative to it and a hash of its text
-/// with the stamp lines left out.
+/// Every file under `dir`, as a path relative to it and a hash of its text.
 fn hashes_under(dir: &Path) -> BTreeMap<String, u64> {
     let mut found = BTreeMap::new();
     let mut stack = vec![dir.to_path_buf()];
@@ -76,12 +75,7 @@ fn hashes_under(dir: &Path) -> BTreeMap<String, u64> {
             }
             let text = std::fs::read_to_string(&path).expect("every file written is text");
             let mut hash = std::collections::hash_map::DefaultHasher::new();
-            for line in text
-                .lines()
-                .filter(|line| !STAMPS.iter().any(|stamp| line.contains(stamp)))
-            {
-                line.hash(&mut hash);
-            }
+            text.hash(&mut hash);
             let relative = path
                 .strip_prefix(dir)
                 .expect("everything found is under the directory")

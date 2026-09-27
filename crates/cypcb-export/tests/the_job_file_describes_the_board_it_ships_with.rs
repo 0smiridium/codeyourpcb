@@ -54,6 +54,7 @@ fn exported(name: &str, world: &mut BoardWorld) -> (Value, Exported) {
         output_dir: dir.clone(),
         preset: from_name("jlcpcb").expect("the preset is there"),
         board_name: "sensor_hub".to_string(),
+        stamp: cypcb_export::stamp::Stamp::UNIX_EPOCH,
     };
     let library = FootprintLibrary::new();
     run_export(&job, world, &library).expect("the export runs");

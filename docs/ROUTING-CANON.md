@@ -594,7 +594,7 @@ citing IPC-2221B and IPC-7093; not the text of either standard.
 In this repo: partly enforced. On the export path the geometry takes its
 relief numbers from the house preset - `pour_thermal_gap` and `pour_spoke_width`
 on `ExportPreset`, handed to the filler by `pour_options`
-(`crates/cypcb-export/src/job.rs:118-122`). Two things are still outside that
+(`crates/cypcb-export/src/job.rs:120-124`). Two things are still outside that
 wiring. The spoke count is not a parameter at all: `thermal_spokes()`
 (`crates/cypcb-core/src/pour.rs:272`) cuts a fixed cross of four whatever a house
 preset asks for, and `thermal_relief_spokes` has no reader. And the pour the

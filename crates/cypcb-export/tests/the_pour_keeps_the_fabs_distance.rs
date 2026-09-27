@@ -83,6 +83,7 @@ fn poured(clearance_mm: f64) -> String {
         &CoordinateFormat::FORMAT_MM_2_6,
         &options,
         None,
+        cypcb_export::stamp::Stamp::UNIX_EPOCH,
     )
     .expect("the layer exports")
 }
@@ -167,7 +168,7 @@ fn handed_off(clearance_mm: f64) -> String {
         &mut world,
         &library,
         cypcb_export::ipc2581::HouseTolerances::default(),
-        "2026-09-16T00:00:00+0000",
+        cypcb_export::stamp::Stamp::UNIX_EPOCH,
         &options,
     );
     document
