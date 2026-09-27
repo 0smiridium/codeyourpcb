@@ -45,7 +45,10 @@ pub fn index_for(design: &Path) -> Option<PathBuf> {
 /// built-ins, plus every `source::name` it uses that its index holds.
 ///
 /// A name the index does not hold is left out, and the sync reports it as an
-/// unknown footprint at the line that named it.
+/// unknown footprint at the line that named it. A name the index could not
+/// answer for - the file does not open, or the footprint stored under the name
+/// does not parse - is marked unreadable, and the sync reports that instead,
+/// naming the index by its path from the design's directory.
 pub fn footprint_library_for(ast: &SourceFile, design: &Path) -> FootprintLibrary {
     let mut library = FootprintLibrary::new();
     let wanted = names_from_an_index(ast);
@@ -55,26 +58,69 @@ pub fn footprint_library_for(ast: &SourceFile, design: &Path) -> FootprintLibrar
     let Some(index) = index_for(design) else {
         return library;
     };
-    let Ok(manager) = LibraryManager::new(&index) else {
-        return library;
+    let unreadable = |why: &dyn std::fmt::Display| {
+        format!(
+            "{INDEX_FILE} at {} could not be read: {why}",
+            from_design(design, &index)
+        )
+    };
+    let manager = match LibraryManager::new(&index) {
+        Ok(manager) => manager,
+        Err(error) => {
+            for full_name in wanted {
+                library.mark_unreadable(full_name, unreadable(&error));
+            }
+            return library;
+        }
     };
     for full_name in wanted {
         let Some((source, name)) = full_name.split_once("::") else {
             continue;
         };
-        let Ok(Some(component)) = manager.get_component(source, name) else {
-            continue;
+        let component = match manager.get_component(source, name) {
+            Ok(Some(component)) => component,
+            Ok(None) => continue,
+            Err(error) => {
+                library.mark_unreadable(full_name, unreadable(&error));
+                continue;
+            }
         };
         let Some(text) = component.footprint_data else {
             continue;
         };
-        let Ok(mut footprint) = cypcb_kicad::import_footprint_from_str(&text) else {
-            continue;
-        };
-        footprint.name = full_name;
-        library.register(footprint);
+        match cypcb_kicad::import_footprint_from_str(&text) {
+            Ok(mut footprint) => {
+                footprint.name = full_name;
+                library.register(footprint);
+            }
+            Err(error) => {
+                let why = unreadable(&format!(
+                    "the footprint stored as '{full_name}' does not parse: {error}"
+                ));
+                library.mark_unreadable(full_name, why);
+            }
+        }
     }
     library
+}
+
+/// Where `index` is, seen from the directory of `design`: `./cypcb-library.db`
+/// beside it, `../cypcb-library.db` one level up, and so on. The index is found
+/// by walking up from that directory, so it is always one of its ancestors.
+fn from_design(design: &Path, index: &Path) -> String {
+    let depth = |path: &Path| path.components().count();
+    let directory = std::path::absolute(design)
+        .ok()
+        .and_then(|design| design.parent().map(Path::to_path_buf));
+    let levels = match (directory, index.parent()) {
+        (Some(directory), Some(holder)) => depth(&directory).saturating_sub(depth(holder)),
+        _ => 0,
+    };
+    if levels == 0 {
+        format!("./{INDEX_FILE}")
+    } else {
+        format!("{}{INDEX_FILE}", "../".repeat(levels))
+    }
 }
 
 /// Every footprint name the design uses that holds `::`, parts inside a
@@ -171,5 +217,102 @@ impl Stamp {
             len: metadata.len(),
             change_counter: [header[24], header[25], header[26], header[27]],
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const BOARD: &str = "version 1\n\nboard b {\n    size 10mm x 10mm\n    layers 2\n}\n\n\
+                         component R1 resistor \"kicad::BROKEN\" {\n    at 5mm, 5mm\n}\n";
+
+    /// A project directory holding the board in `sub`, and nothing else.
+    fn project(tag: &str, sub: &str) -> (PathBuf, PathBuf) {
+        let dir = std::env::temp_dir().join(format!("cypcb-design-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("a place to work");
+        std::fs::create_dir_all(dir.join(sub)).expect("a place for the board");
+        let design = dir.join(sub).join("board.cypcb");
+        std::fs::write(&design, BOARD).expect("the board is written");
+        (dir, design)
+    }
+
+    fn why(design: &Path) -> Option<String> {
+        let ast = cypcb_parser::parse(BOARD);
+        assert!(
+            ast.errors.is_empty(),
+            "the board in this test does not parse: {:?}",
+            ast.errors
+        );
+        footprint_library_for(&ast.value, design)
+            .why_unreadable("kicad::BROKEN")
+            .map(str::to_string)
+    }
+
+    #[test]
+    fn an_index_that_does_not_open_is_named_with_its_path() {
+        let (dir, design) = project("garbage", "boards");
+        std::fs::write(
+            dir.join(INDEX_FILE),
+            "this file was never a database, whatever it is called",
+        )
+        .expect("the file is written");
+
+        let why = why(&design).expect("the index was found and did not read");
+        assert!(
+            why.starts_with("cypcb-library.db at ../cypcb-library.db could not be read: "),
+            "{why}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_entry_that_does_not_parse_is_named_with_the_index() {
+        let (dir, design) = project("entry", ".");
+        let conn = rusqlite::Connection::open(dir.join(INDEX_FILE)).expect("the index opens");
+        crate::schema::initialize_schema(&conn).expect("the schema is written");
+        crate::schema::insert_library(
+            &conn,
+            &crate::models::LibraryInfo {
+                source: "kicad".to_string(),
+                name: "Broken".to_string(),
+                path: None,
+                version: None,
+                enabled: true,
+                component_count: 1,
+            },
+        )
+        .expect("the library is stored");
+        crate::schema::insert_component(
+            &conn,
+            &crate::models::Component {
+                id: crate::models::ComponentId::new("kicad", "BROKEN"),
+                library: "Broken".to_string(),
+                category: None,
+                footprint_data: Some("(footprint \"BROKEN\" (pad".to_string()),
+                metadata: Default::default(),
+            },
+        )
+        .expect("the entry is stored");
+        drop(conn);
+
+        let why = why(&design).expect("the entry was found and did not parse");
+        assert!(
+            why.starts_with(
+                "cypcb-library.db at ./cypcb-library.db could not be read: \
+                 the footprint stored as 'kicad::BROKEN' does not parse: "
+            ),
+            "{why}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The control: with no index at all, the name is simply unknown.
+    #[test]
+    fn without_an_index_nothing_is_unreadable() {
+        let (dir, design) = project("none", ".");
+        assert_eq!(why(&design), None);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

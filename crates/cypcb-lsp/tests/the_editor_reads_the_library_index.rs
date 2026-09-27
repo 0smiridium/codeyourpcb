@@ -116,6 +116,37 @@ fn without_the_index_the_same_design_is_refused() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// An index that does not open is reported as that, not as a footprint nobody
+/// imported: the name may well be in the file.
+#[test]
+fn an_index_that_does_not_open_is_reported_as_one() {
+    let dir = project("garbage", false);
+    std::fs::write(
+        dir.join("cypcb-library.db"),
+        "this file was never a database, whatever it is called",
+    )
+    .expect("the file is written");
+    let doc = opened(&dir);
+
+    let messages: Vec<String> = cypcb_lsp::diagnostics::run_diagnostics(&doc)
+        .into_iter()
+        .map(|diagnostic| diagnostic.message)
+        .collect();
+    assert!(
+        messages.iter().any(|message| message
+            .starts_with("cypcb-library.db at ./cypcb-library.db could not be read: ")),
+        "{messages:?}"
+    );
+    assert!(
+        !messages
+            .iter()
+            .any(|message| message.contains("unknown footprint")),
+        "{messages:?}"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// A design with a footprint of its own and a part whose footprint is being
 /// typed.
 const OFFERS: &str = r#"version 1

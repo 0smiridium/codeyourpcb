@@ -86,6 +86,19 @@ pub enum SyncError {
         span: miette::SourceSpan,
     },
 
+    /// A component's footprint was to come from a source that could not be
+    /// read, such as a library index that does not open.
+    UnreadableFootprint {
+        /// The footprint name the component uses.
+        name: String,
+        /// What could not be read, and why.
+        why: String,
+        /// Source code for miette display.
+        src: String,
+        /// Source span of the footprint reference.
+        span: miette::SourceSpan,
+    },
+
     /// A reference designator is used more than once.
     DuplicateRefDes {
         /// The duplicated refdes.
@@ -271,6 +284,7 @@ impl fmt::Display for SyncError {
             SyncError::UnknownFootprint { name, .. } => {
                 write!(f, "unknown footprint: '{}'", name)
             }
+            SyncError::UnreadableFootprint { why, .. } => write!(f, "{why}"),
             SyncError::DuplicateRefDes { refdes, .. } => {
                 write!(f, "duplicate reference designator: '{}'", refdes)
             }
@@ -365,6 +379,9 @@ impl Diagnostic for SyncError {
     fn code<'a>(&'a self) -> Option<Box<dyn fmt::Display + 'a>> {
         match self {
             SyncError::UnknownFootprint { .. } => Some(Box::new("cypcb::sync::unknown_footprint")),
+            SyncError::UnreadableFootprint { .. } => {
+                Some(Box::new("cypcb::sync::unreadable_footprint"))
+            }
             SyncError::DuplicateRefDes { .. } => Some(Box::new("cypcb::sync::duplicate_refdes")),
             SyncError::UnknownComponent { .. } => Some(Box::new("cypcb::sync::unknown_component")),
             SyncError::UnknownCoverageRegion { .. } => {
@@ -399,6 +416,9 @@ impl Diagnostic for SyncError {
             SyncError::UnknownFootprint { .. } => {
                 Some(Box::new("add this footprint to the library or use a built-in footprint like '0402', '0603', 'DIP-8'"))
             }
+            SyncError::UnreadableFootprint { name, .. } => Some(Box::new(format!(
+                "'{name}' is read from that file, so it cannot be looked up until the file reads"
+            ))),
             SyncError::DuplicateRefDes { .. } => {
                 Some(Box::new("each component must have a unique reference designator"))
             }
@@ -486,6 +506,7 @@ impl Diagnostic for SyncError {
     fn source_code(&self) -> Option<&dyn SourceCode> {
         match self {
             SyncError::UnknownFootprint { src, .. } => Some(src),
+            SyncError::UnreadableFootprint { src, .. } => Some(src),
             SyncError::DuplicateRefDes { src, .. } => Some(src),
             SyncError::UnknownComponent { src, .. } => Some(src),
             SyncError::UnknownCoverageRegion { src, .. } => Some(src),
@@ -510,6 +531,9 @@ impl Diagnostic for SyncError {
                     *span,
                 ))))
             }
+            SyncError::UnreadableFootprint { span, .. } => Some(Box::new(std::iter::once(
+                LabeledSpan::new_with_span(Some("footprint not read".to_string()), *span),
+            ))),
             SyncError::DuplicateRefDes {
                 first, duplicate, ..
             } => Some(Box::new(
@@ -1325,7 +1349,17 @@ fn sync_component(
 
     // Check footprint exists
     let footprint_name = &comp.footprint.value;
-    if !footprint_lib.contains(footprint_name) {
+    if let Some(why) = footprint_lib
+        .why_unreadable(footprint_name)
+        .filter(|_| !footprint_lib.contains(footprint_name))
+    {
+        result.errors.push(SyncError::UnreadableFootprint {
+            name: footprint_name.clone(),
+            why: why.to_string(),
+            src: source.to_string(),
+            span: span_to_source_span(&comp.footprint.span),
+        });
+    } else if !footprint_lib.contains(footprint_name) {
         result.errors.push(SyncError::UnknownFootprint {
             name: footprint_name.clone(),
             src: source.to_string(),
