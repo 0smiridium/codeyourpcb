@@ -30,4 +30,8 @@ pub enum LibraryError {
     /// Library or component not found
     #[error("Not found: {0}")]
     NotFound(String),
+
+    /// A component the index did not write, with the reason
+    #[error("{0}")]
+    NotIndexed(String),
 }

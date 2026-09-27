@@ -13,14 +13,14 @@ use tower_lsp::lsp_types::{
     DidChangeTextDocumentParams, DidCloseTextDocumentParams, DidOpenTextDocumentParams,
     DidSaveTextDocumentParams, GotoDefinitionParams, GotoDefinitionResponse, Hover, HoverContents,
     HoverParams, HoverProviderCapability, InitializeParams, InitializeResult, InitializedParams,
-    InsertTextFormat, MarkedString, NumberOrString, Position, PositionEncodingKind, Range,
-    SaveOptions, ServerCapabilities, ServerInfo, TextDocumentSyncCapability, TextDocumentSyncKind,
-    TextDocumentSyncOptions, TextDocumentSyncSaveOptions, Uri,
+    InsertTextFormat, MarkedString, MessageType, NumberOrString, Position, PositionEncodingKind,
+    Range, SaveOptions, ServerCapabilities, ServerInfo, TextDocumentSyncCapability,
+    TextDocumentSyncKind, TextDocumentSyncOptions, TextDocumentSyncSaveOptions, Uri,
 };
 use tower_lsp::{Client, LanguageServer};
 use tracing::{debug, info};
 
-use crate::completion::{completion_at_position, CompletionItemKind};
+use crate::completion::{completion_at_position, unread_index_at, CompletionItemKind};
 use crate::diagnostics::run_diagnostics;
 use crate::document::{DocumentState, Encoding};
 use crate::goto::goto_definition;
@@ -302,6 +302,11 @@ impl LanguageServer for Backend {
 
             // Get completions from our implementation
             let items = completion_at_position(&doc, &our_position);
+            let unread = unread_index_at(&doc, &our_position);
+            drop(doc);
+            if let Some(why) = unread {
+                self.client.log_message(MessageType::WARNING, why).await;
+            }
 
             if items.is_empty() {
                 return Ok(None);

@@ -136,13 +136,15 @@ impl LibrarySource for KiCadSource {
             LibraryError::NotFound(format!("Library '{}' not found in search paths", name))
         })?;
 
-        // Read all .kicad_mod files in the directory
+        // Read all .kicad_mod files in the directory, in name order, so the
+        // file that wins a duplicate name is the same on every machine.
         let mut components = Vec::new();
+        let mut paths = fs::read_dir(&library_path)?
+            .map(|entry| entry.map(|entry| entry.path()))
+            .collect::<Result<Vec<_>, _>>()?;
+        paths.sort();
 
-        for entry in fs::read_dir(&library_path)? {
-            let entry = entry?;
-            let path = entry.path();
-
+        for path in paths {
             if path.is_file() {
                 if let Some(ext) = path.extension() {
                     if ext == "kicad_mod" {

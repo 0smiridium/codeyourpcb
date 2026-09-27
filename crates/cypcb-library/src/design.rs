@@ -46,9 +46,10 @@ pub fn index_for(design: &Path) -> Option<PathBuf> {
 ///
 /// A name the index does not hold is left out, and the sync reports it as an
 /// unknown footprint at the line that named it. A name the index could not
-/// answer for - the file does not open, or the footprint stored under the name
-/// does not parse - is marked unreadable, and the sync reports that instead,
-/// naming the index by its path from the design's directory.
+/// answer for - the file does not open, the entry holds no footprint, or the
+/// footprint stored under the name does not parse - is marked unreadable, and
+/// the sync reports that instead, naming the index by its path from the
+/// design's directory.
 pub fn footprint_library_for(ast: &SourceFile, design: &Path) -> FootprintLibrary {
     let mut library = FootprintLibrary::new();
     let wanted = names_from_an_index(ast);
@@ -85,7 +86,15 @@ pub fn footprint_library_for(ast: &SourceFile, design: &Path) -> FootprintLibrar
                 continue;
             }
         };
+        // An entry can hold a part's details and no footprint. It was left
+        // out like a name the index does not hold, and the design was told
+        // `unknown footprint` about a name the index does hold.
         let Some(text) = component.footprint_data else {
+            let why = format!(
+                "{INDEX_FILE} at {} holds '{full_name}' with no footprint",
+                from_design(design, &index)
+            );
+            library.mark_unreadable(full_name, why);
             continue;
         };
         match cypcb_kicad::import_footprint_from_str(&text) {
@@ -146,8 +155,8 @@ fn collect(definitions: &[Definition], names: &mut BTreeSet<String>) {
 /// Every name the index nearest `design` can resolve, written the way a
 /// design writes it and `cypcb library search` prints it: `source::name`.
 ///
-/// Empty when there is no index or it cannot be read, as
-/// [`footprint_library_for`] is silent about both.
+/// Empty when there is no index or it cannot be read;
+/// [`index_unreadable_for`] says why it could not.
 ///
 /// The editor asks on every completion, and an index built from the KiCad
 /// library holds some ten thousand names, so a reading is kept per index file
@@ -156,45 +165,67 @@ fn collect(definitions: &[Definition], names: &mut BTreeSet<String>) {
 /// commit: the time alone can repeat when two imports land inside one clock
 /// tick of the file system, and the counter cannot.
 pub fn index_names_for(design: &Path) -> Arc<[String]> {
-    let Some(index) = index_for(design) else {
-        return Arc::from([]);
-    };
-    let Some(stamp) = Stamp::of(&index) else {
-        return Arc::from([]);
-    };
+    reading_for(design).map_or_else(|| Arc::from([]), |(_, reading)| reading.names)
+}
+
+/// Why the index nearest `design` gave no names, when it is there and does
+/// not read, in the words the sync uses for a name the design takes from it:
+/// `cypcb-library.db at <path from the design> could not be read: <reason>`.
+///
+/// The editor offered the built-ins alone then, and a list without the index
+/// names looked the same as an index that holds none.
+pub fn index_unreadable_for(design: &Path) -> Option<String> {
+    let (index, reading) = reading_for(design)?;
+    let why = reading.why?;
+    Some(format!(
+        "{INDEX_FILE} at {} could not be read: {why}",
+        from_design(design, &index)
+    ))
+}
+
+/// The reading of the index nearest `design`, kept until the file changes.
+fn reading_for(design: &Path) -> Option<(PathBuf, Reading)> {
+    let index = index_for(design)?;
+    let stamp = Stamp::of(&index)?;
     let readings = READINGS.get_or_init(|| Mutex::new(HashMap::new()));
     if let Some(reading) = readings.lock().unwrap().get(&index) {
         if reading.stamp == stamp {
-            return Arc::clone(&reading.names);
+            return Some((index, reading.clone()));
         }
     }
-    let names = read_names(&index);
-    readings.lock().unwrap().insert(
-        index,
-        Reading {
-            stamp,
-            names: Arc::clone(&names),
-        },
-    );
-    names
+    let reading = read_names(&index, stamp);
+    readings
+        .lock()
+        .unwrap()
+        .insert(index.clone(), reading.clone());
+    Some((index, reading))
 }
 
-fn read_names(index: &Path) -> Arc<[String]> {
-    let Ok(manager) = LibraryManager::new(index) else {
-        return Arc::from([]);
-    };
-    manager
-        .footprint_ids()
-        .map(|ids| ids.iter().map(|id| id.to_string()).collect())
-        .unwrap_or_else(|_| Arc::from([]))
+fn read_names(index: &Path, stamp: Stamp) -> Reading {
+    let names = LibraryManager::new(index).and_then(|manager| manager.footprint_ids());
+    match names {
+        Ok(ids) => Reading {
+            stamp,
+            names: ids.iter().map(|id| id.to_string()).collect(),
+            why: None,
+        },
+        Err(error) => Reading {
+            stamp,
+            names: Arc::from([]),
+            why: Some(error.to_string().into()),
+        },
+    }
 }
 
 /// Names read from each index file, with the stamp the file had when read.
 static READINGS: OnceLock<Mutex<HashMap<PathBuf, Reading>>> = OnceLock::new();
 
+#[derive(Clone)]
 struct Reading {
     stamp: Stamp,
     names: Arc<[String]>,
+    /// Why the file gave no names, when it did not read.
+    why: Option<Arc<str>>,
 }
 
 /// What an index file looks like from outside, without opening the database.
@@ -313,6 +344,68 @@ mod tests {
     fn without_an_index_nothing_is_unreadable() {
         let (dir, design) = project("none", ".");
         assert_eq!(why(&design), None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_entry_without_a_footprint_is_named_as_one() {
+        let (dir, design) = project("no-footprint", ".");
+        let conn = rusqlite::Connection::open(dir.join(INDEX_FILE)).expect("the index opens");
+        crate::schema::initialize_schema(&conn).expect("the schema is written");
+        crate::schema::insert_library(
+            &conn,
+            &crate::models::LibraryInfo {
+                source: "kicad".to_string(),
+                name: "Parts".to_string(),
+                path: None,
+                version: None,
+                enabled: true,
+                component_count: 1,
+            },
+        )
+        .expect("the library is stored");
+        crate::schema::insert_component(
+            &conn,
+            &crate::models::Component {
+                id: crate::models::ComponentId::new("kicad", "BROKEN"),
+                library: "Parts".to_string(),
+                category: None,
+                footprint_data: None,
+                metadata: Default::default(),
+            },
+        )
+        .expect("the entry is stored");
+        drop(conn);
+
+        assert_eq!(
+            why(&design).as_deref(),
+            Some("cypcb-library.db at ./cypcb-library.db holds 'kicad::BROKEN' with no footprint")
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_index_that_gives_no_names_says_why() {
+        let (dir, design) = project("names-garbage", "boards");
+        std::fs::write(
+            dir.join(INDEX_FILE),
+            "this file was never a database, whatever it is called",
+        )
+        .expect("the file is written");
+
+        assert!(index_names_for(&design).is_empty());
+        let why = index_unreadable_for(&design).expect("the index is there and does not read");
+        assert!(
+            why.starts_with("cypcb-library.db at ../cypcb-library.db could not be read: "),
+            "{why}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn without_an_index_no_names_are_missing() {
+        let (dir, design) = project("names-none", ".");
+        assert_eq!(index_unreadable_for(&design), None);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

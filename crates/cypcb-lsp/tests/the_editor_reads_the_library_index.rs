@@ -169,6 +169,16 @@ component R1 resistor "kicad::R_0603_1608Metric" {
 /// The labels offered inside R1's footprint string of [`OFFERS`], written
 /// into `dir`.
 fn offered_in(dir: &Path) -> Vec<String> {
+    let (doc, position) = inside_the_footprint(dir);
+    completion_at_position(&doc, &position)
+        .into_iter()
+        .map(|item| item.label)
+        .collect()
+}
+
+/// [`OFFERS`] written into `dir` and opened, and the position inside R1's
+/// footprint string.
+fn inside_the_footprint(dir: &Path) -> (DocumentState, Position) {
     let path = dir.join("offers.cypcb");
     std::fs::write(&path, OFFERS).expect("the board is written");
     let mut doc = DocumentState::new(format!("file://{}", path.display()), OFFERS.to_string(), 1);
@@ -180,16 +190,50 @@ fn offered_in(dir: &Path) -> Vec<String> {
         .find(|(_, line)| line.starts_with("component R1 "))
         .expect("the board places R1");
     let character = text.find('"').expect("the line names a footprint") as u32 + 1;
-    completion_at_position(
-        &doc,
-        &Position {
+    (
+        doc,
+        Position {
             line: line as u32,
             character,
         },
     )
-    .into_iter()
-    .map(|item| item.label)
-    .collect()
+}
+
+/// An index that does not read gives the completion no names. The editor is
+/// told why, where it logs, and not left with a list that looks like an
+/// index holding nothing.
+#[test]
+fn completion_says_why_an_index_gives_no_names() {
+    let dir = project("offers-garbage", false);
+    std::fs::write(
+        dir.join("cypcb-library.db"),
+        "this file was never a database, whatever it is called",
+    )
+    .expect("the file is written");
+    let (doc, position) = inside_the_footprint(&dir);
+
+    let why = cypcb_lsp::completion::unread_index_at(&doc, &position)
+        .expect("the index is there and does not read");
+    assert!(
+        why.starts_with("cypcb-library.db at ./cypcb-library.db could not be read: "),
+        "{why}"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The control: an index that reads gives no reason.
+#[test]
+fn completion_is_silent_about_an_index_that_reads() {
+    let dir = project("offers-reads", true);
+    let (doc, position) = inside_the_footprint(&dir);
+
+    assert_eq!(
+        cypcb_lsp::completion::unread_index_at(&doc, &position),
+        None
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// Inside a footprint string the editor offers the built-ins, the design's

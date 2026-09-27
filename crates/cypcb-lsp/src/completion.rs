@@ -408,6 +408,19 @@ pub fn footprint_completions_for(doc: &DocumentState) -> Vec<CompletionItem> {
     items
 }
 
+/// Why the completion at `position` offers no names from the index nearest
+/// the document, when that index is there and does not read. The editor
+/// logs it, so a list with the index names missing is not taken for an index
+/// that holds none.
+pub fn unread_index_at(doc: &DocumentState, position: &Position) -> Option<String> {
+    let offset = doc.position_to_offset(position)?;
+    let ast = doc.ast.as_ref()?;
+    if find_completion_context(ast, &doc.content, offset) != CompletionContext::ComponentFootprint {
+        return None;
+    }
+    cypcb_library::design::index_unreadable_for(doc.path.as_ref()?)
+}
+
 /// One completion per footprint in `lib`, sorted by name.
 fn library_completions(lib: &FootprintLibrary) -> Vec<CompletionItem> {
     let mut items = Vec::new();
