@@ -83,7 +83,9 @@ fn inline_footprints(source: &str) -> Option<Vec<Footprint>> {
         .collect();
     let mut world = BoardWorld::new();
     let mut library = FootprintLibrary::new();
-    sync_ast_to_world(&parsed.value, source, &mut world, &mut library);
+    // Footprints register before anything else is read, so a file whose
+    // imports or parts do not resolve still yields the footprints it declares.
+    let _ = sync_ast_to_world(&parsed.value, source, &mut world, &mut library);
     Some(
         names
             .iter()

@@ -630,6 +630,7 @@ impl miette::Diagnostic for SyncWarning {
 /// The synchronization continues even when errors occur, producing
 /// a partial world that can still be useful for error reporting.
 #[derive(Debug, Default)]
+#[must_use = "a board that did not sync is only partly loaded; check `errors`"]
 pub struct SyncResult {
     /// Semantic errors encountered during sync.
     pub errors: Vec<SyncError>,
@@ -2910,7 +2911,8 @@ trace SIG {
         let parsed = cypcb_parser::parse(source);
         let mut world = BoardWorld::new();
         let mut library = FootprintLibrary::new();
-        sync_ast_to_world(&parsed.value, source, &mut world, &mut library);
+        let result = sync_ast_to_world(&parsed.value, source, &mut world, &mut library);
+        assert!(result.is_ok(), "sync errors: {:?}", result.errors);
 
         let expected = world.get_net("SIG").expect("net interned");
         let ecs = world.ecs_mut();
@@ -3565,13 +3567,15 @@ board test { size 20mm x 20mm }
         let mut lib = FootprintLibrary::new();
 
         let first = parse(with_footprint);
-        sync_ast_to_world(&first.value, with_footprint, &mut world, &mut lib);
+        let result = sync_ast_to_world(&first.value, with_footprint, &mut world, &mut lib);
+        assert!(result.is_ok(), "sync errors: {:?}", result.errors);
         assert!(lib.contains("TEMP_PART"));
 
         // Hot reload with the footprint deleted from the source: it must not
         // linger and keep resolving.
         let second = parse(without_footprint);
-        sync_ast_to_world(&second.value, without_footprint, &mut world, &mut lib);
+        let result = sync_ast_to_world(&second.value, without_footprint, &mut world, &mut lib);
+        assert!(result.is_ok(), "sync errors: {:?}", result.errors);
         assert!(!lib.contains("TEMP_PART"));
         assert!(lib.contains("0402"), "built-ins must survive a re-sync");
     }
