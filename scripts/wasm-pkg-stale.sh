@@ -285,7 +285,11 @@ fi
 
 # Whether rebuilding this source changes what is committed. Cheap enough to
 # ask before the answer is needed, and needed by two of the three verdicts.
-REBUILT=$(git status --porcelain -- viewer/pkg)
+# Only the committed files are compared: a file lying untracked in viewer/pkg
+# is not something a rebuild changed, and counting it called the module stale
+# in a checkout that held one stray file. A build that starts writing a new
+# file also rewrites the glue that loads it, which is committed.
+REBUILT=$(git status --porcelain --untracked-files=no -- viewer/pkg)
 
 case "$(verdict "$MOVED$LOCK_REASON" "$REBUILT")" in
   current)
