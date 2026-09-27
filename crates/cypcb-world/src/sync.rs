@@ -2656,6 +2656,15 @@ use A as TOP {
 }
 "#;
         let parsed = cypcb_parser::parse(source);
+        assert!(
+            parsed.errors.is_empty(),
+            "the board in this test does not parse: {:?}",
+            parsed
+                .errors
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+        );
         let mut world = BoardWorld::new();
         let mut library = FootprintLibrary::new();
         let result = sync_ast_to_world(&parsed.value, source, &mut world, &mut library);
@@ -2684,6 +2693,15 @@ use NoSuchThing as X {
 }
 "#;
         let parsed = cypcb_parser::parse(source);
+        assert!(
+            parsed.errors.is_empty(),
+            "the board in this test does not parse: {:?}",
+            parsed
+                .errors
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+        );
         let mut world = BoardWorld::new();
         let mut library = FootprintLibrary::new();
         let result = sync_ast_to_world(&parsed.value, source, &mut world, &mut library);
@@ -2730,6 +2748,15 @@ use M as A {
 }
 "#;
         let parsed = cypcb_parser::parse(source);
+        assert!(
+            parsed.errors.is_empty(),
+            "the board in this test does not parse: {:?}",
+            parsed
+                .errors
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+        );
         let mut world = BoardWorld::new();
         let mut library = FootprintLibrary::new();
         let result = sync_ast_to_world(&parsed.value, source, &mut world, &mut library);
@@ -2909,6 +2936,15 @@ trace SIG {
 }
 "#;
         let parsed = cypcb_parser::parse(source);
+        assert!(
+            parsed.errors.is_empty(),
+            "the board in this test does not parse: {:?}",
+            parsed
+                .errors
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+        );
         let mut world = BoardWorld::new();
         let mut library = FootprintLibrary::new();
         let result = sync_ast_to_world(&parsed.value, source, &mut world, &mut library);
@@ -3567,6 +3603,15 @@ board test { size 20mm x 20mm }
         let mut lib = FootprintLibrary::new();
 
         let first = parse(with_footprint);
+        assert!(
+            first.errors.is_empty(),
+            "the board in this test does not parse: {:?}",
+            first
+                .errors
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+        );
         let result = sync_ast_to_world(&first.value, with_footprint, &mut world, &mut lib);
         assert!(result.is_ok(), "sync errors: {:?}", result.errors);
         assert!(lib.contains("TEMP_PART"));
@@ -3574,6 +3619,15 @@ board test { size 20mm x 20mm }
         // Hot reload with the footprint deleted from the source: it must not
         // linger and keep resolving.
         let second = parse(without_footprint);
+        assert!(
+            second.errors.is_empty(),
+            "the board in this test does not parse: {:?}",
+            second
+                .errors
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+        );
         let result = sync_ast_to_world(&second.value, without_footprint, &mut world, &mut lib);
         assert!(result.is_ok(), "sync errors: {:?}", result.errors);
         assert!(!lib.contains("TEMP_PART"));

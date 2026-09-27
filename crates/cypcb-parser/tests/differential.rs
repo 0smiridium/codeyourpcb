@@ -100,6 +100,13 @@ fn the_two_readers_agree_on_every_board_the_new_one_claims() {
             differences.push(format!("{name}: the reader reported {:?}", actual.errors));
             continue;
         }
+        if !expected.errors.is_empty() {
+            differences.push(format!(
+                "{name}: tree-sitter reported {:?}",
+                expected.errors
+            ));
+            continue;
+        }
         definitions_compared += expected.value.definitions.len();
         let (expected, actual) = (shape(&expected.value), shape(&actual.value));
         if expected != actual {

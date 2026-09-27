@@ -50,6 +50,15 @@ fn board(pads: &[PadInfo], silk: &[SilkInfo]) -> (BoardWorld, FootprintLibrary) 
         silk: silk.iter().flat_map(SilkInfo::to_shapes).collect(),
     });
     let parsed = cypcb_parser::parse(SOURCE);
+    assert!(
+        parsed.errors.is_empty(),
+        "the board in this test does not parse: {:?}",
+        parsed
+            .errors
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+    );
     let mut world = BoardWorld::new();
     let synced = cypcb_world::sync_ast_to_world(&parsed.value, SOURCE, &mut world, &mut library);
     assert!(

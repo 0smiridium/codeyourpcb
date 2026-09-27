@@ -47,7 +47,11 @@ fn the_inner_copper_is_in_the_snapshot_too() {
     // show and the canvas could not draw, which is the shape of defect this
     // project has recorded three times: a row for something nothing draws.
     let mut engine = PcbEngine::new();
-    engine.load_source(&example("four-layer.cypcb"));
+    let loaded = engine.load_source(&example("four-layer.cypcb"));
+    assert!(
+        loaded.is_empty(),
+        "the board in this test does not load: {loaded}"
+    );
     let snapshot = engine.build_snapshot();
 
     let inner: Vec<&str> = snapshot

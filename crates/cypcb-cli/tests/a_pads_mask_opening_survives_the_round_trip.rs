@@ -75,6 +75,15 @@ fn the_margin_a_design_states_reaches_the_board() {
 fn the_writer_says_the_margin_the_reader_read() {
     let source = design_with(" mask 0.1016mm");
     let parsed = cypcb_parser::parse(&source);
+    assert!(
+        parsed.errors.is_empty(),
+        "the design with a mask opening does not parse: {:?}",
+        parsed
+            .errors
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+    );
     let mut world = BoardWorld::new();
     let mut library = FootprintLibrary::new();
     let synced = sync_ast_to_world(&parsed.value, &source, &mut world, &mut library);
@@ -104,6 +113,15 @@ fn the_writer_says_the_margin_the_reader_read() {
 fn a_pad_that_asks_for_nothing_is_written_as_asking_for_nothing() {
     let source = design_with("");
     let parsed = cypcb_parser::parse(&source);
+    assert!(
+        parsed.errors.is_empty(),
+        "the design with a mask opening does not parse: {:?}",
+        parsed
+            .errors
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+    );
     let mut world = BoardWorld::new();
     let mut library = FootprintLibrary::new();
     let synced = sync_ast_to_world(&parsed.value, &source, &mut world, &mut library);

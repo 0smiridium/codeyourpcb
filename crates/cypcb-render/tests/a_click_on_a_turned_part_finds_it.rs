@@ -65,7 +65,11 @@ fn a_click_on_each_pad_finds_the_part_once_the_board_is_loaded() {
     let mut lost = Vec::new();
     for degrees in ANGLES {
         let mut engine = PcbEngine::new();
-        engine.load_source(&board(degrees));
+        let loaded = engine.load_source(&board(degrees));
+        assert!(
+            loaded.is_empty(),
+            "the board in this test does not load: {loaded}"
+        );
         lost.extend(missed(&mut engine, degrees));
     }
     assert!(lost.is_empty(), "no part under these pads: {lost:?}");
@@ -79,7 +83,11 @@ fn a_click_on_each_pad_finds_the_part_after_an_edit() {
     let mut unpicked = Vec::new();
     for degrees in ANGLES {
         let mut engine = PcbEngine::new();
-        engine.load_source(&board(degrees));
+        let loaded = engine.load_source(&board(degrees));
+        assert!(
+            loaded.is_empty(),
+            "the board in this test does not load: {loaded}"
+        );
         let (x, y) = pad_at(degrees, 3.0);
         let trace = engine.add_trace("N", "Top", 100_000, &[x - 1_000_000, y, x + 1_000_000, y]);
         assert_ne!(trace, u32::MAX, "the trace is added");

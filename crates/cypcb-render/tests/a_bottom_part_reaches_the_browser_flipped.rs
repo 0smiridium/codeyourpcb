@@ -37,7 +37,11 @@ component R1 resistor "0402" {{
 
 fn snapshot(source: &str) -> serde_json::Value {
     let mut engine = PcbEngine::new();
-    engine.load_source(source);
+    let loaded = engine.load_source(source);
+    assert!(
+        loaded.is_empty(),
+        "the board in this test does not load: {loaded}"
+    );
     serde_json::from_str(&engine.get_snapshot()).expect("the snapshot is JSON")
 }
 

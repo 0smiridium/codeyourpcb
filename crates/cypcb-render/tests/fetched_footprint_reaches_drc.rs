@@ -192,7 +192,11 @@ component R1 resistor "MARKED" {
     at 10mm, 10mm
 }
 "#;
-    assert!(engine.load_source(source).is_empty());
+    let loaded = engine.load_source(source);
+    assert!(
+        loaded.is_empty(),
+        "the board in this test does not load: {loaded}"
+    );
 
     let snapshot = engine.get_snapshot();
     let segments = snapshot.matches(r#""type":"segment""#).count();

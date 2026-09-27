@@ -256,6 +256,14 @@ fn a_definition_span_starts_at_its_keyword() {
             .to_string();
         let source = std::fs::read_to_string(&file).expect("the example is readable");
         let ast = parse(&source);
+        assert!(
+            ast.errors.is_empty(),
+            "{name} does not parse: {:?}",
+            ast.errors
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+        );
 
         for definition in &ast.value.definitions {
             let span = definition.span();
@@ -294,6 +302,14 @@ fn a_definition_span_ends_after_everything_inside_it() {
             .to_string();
         let source = std::fs::read_to_string(&file).expect("the example is readable");
         let ast = parse(&source);
+        assert!(
+            ast.errors.is_empty(),
+            "{name} does not parse: {:?}",
+            ast.errors
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+        );
 
         for definition in &ast.value.definitions {
             let outer = definition.span();
@@ -341,6 +357,14 @@ fn how_far_apart_the_two_parsers_put_a_definition() {
             .to_string();
         let source = std::fs::read_to_string(&file).expect("the example is readable");
         let ours = parse(&source);
+        assert!(
+            ours.errors.is_empty(),
+            "{name} does not parse: {:?}",
+            ours.errors
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+        );
         let theirs = cypcb_parser::tree_sitter_parse(&source);
 
         for (a, b) in ours.value.definitions.iter().zip(&theirs.value.definitions) {
