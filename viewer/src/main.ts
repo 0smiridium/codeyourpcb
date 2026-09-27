@@ -2442,7 +2442,11 @@ async function init(): Promise<void> {
         }
 
         // Load routes
-        engine.load_routes(content);
+        const sesTrouble = engine.load_ses(content);
+        if (sesTrouble) {
+          statusText.textContent = sesTrouble;
+          return;
+        }
         pullSnapshot();
         markTracesUnsaved();
         syncEditorTraces();
@@ -2535,7 +2539,11 @@ async function init(): Promise<void> {
         statusText.textContent = 'Load a .cypcb file first';
         return;
       }
-      engine.load_routes(result.content);
+      const sesTrouble = engine.load_ses(result.content);
+      if (sesTrouble) {
+        statusText.textContent = sesTrouble;
+        return;
+      }
       pullSnapshot();
       markTracesUnsaved();
       syncEditorTraces();
@@ -3367,7 +3375,11 @@ async function init(): Promise<void> {
 
     if (sesContent) {
       console.log('[Routing] Loading SES routes...');
-      engine.load_routes(sesContent);
+      const sesTrouble = engine.load_ses(sesContent);
+      if (sesTrouble) {
+        statusText.textContent = sesTrouble;
+        return;
+      }
       pullSnapshot();
       markTracesUnsaved();
       syncEditorTraces();

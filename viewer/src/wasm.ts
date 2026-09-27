@@ -194,8 +194,13 @@ export interface PcbEngine {
    * before the viewer could open one at all.
    */
   load_kicad(source: string): string;
-  /** Load routing results from .ses file content */
-  load_routes(sesContent: string): void;
+  /**
+   * Put the routes of a `.ses` session file on the board. The engine reads
+   * the file and holds the copper, so the ratsnest and the violations come
+   * back in the snapshot like any other copper. Returns what went wrong, or
+   * an empty string.
+   */
+  load_ses(sesContent: string): string;
   /** Get the current board state as a snapshot */
   get_snapshot(): BoardSnapshot;
   /** Query what's at a specific point (in nanometers), returns list of entity descriptions */
@@ -336,6 +341,7 @@ export interface WasmPcbEngine {
   load_source_with_imports(source: string, files_json: string): string;
   /** Read a `.kicad_pcb` and build the board from it. */
   load_kicad(source: string): string;
+  load_ses(ses: string): string;
   load_snapshot(snapshot: BoardSnapshot): string;
   get_snapshot(): BoardSnapshot;
   query_point(x_nm: bigint, y_nm: bigint): string[];
@@ -381,179 +387,6 @@ let engineInstance: PcbEngine | null = null;
 // until somebody changes one of them. `PcbEngine::min_trace_width_for_current_ma`
 // is the only implementation the viewer reaches now.
 
-
-/**
- * Parse FreeRouting .ses (session) file to extract routing results.
- * Returns traces and vias that can be added to a BoardSnapshot.
- */
-function parseSesFile(sesContent: string): { traces: BoardSnapshot['traces']; vias: BoardSnapshot['vias'] } {
-  const traces: BoardSnapshot['traces'] = [];
-  const vias: BoardSnapshot['vias'] = [];
-
-  // Default resolution: mil 10 = 1/10 mil = 2540 nm
-  let resolution = 2540; // nm per unit
-
-  // Parse resolution from routes section
-  const resMatch = sesContent.match(/\(routes[\s\S]*?\(resolution\s+(\w+)\s+(\d+)\)/);
-  if (resMatch) {
-    const unit = resMatch[1];
-    const divisor = parseInt(resMatch[2], 10);
-    if (unit === 'mil') {
-      resolution = Math.round(25400 / divisor); // 1 mil = 25400 nm
-    } else if (unit === 'mm') {
-      resolution = Math.round(1_000_000 / divisor);
-    }
-  }
-  console.log('[SES Parser] Resolution:', resolution, 'nm per unit');
-
-  // Find network_out content
-  const networkOutStart = sesContent.indexOf('(network_out');
-  if (networkOutStart === -1) {
-    console.log('[SES Parser] No network_out section found');
-    return { traces, vias };
-  }
-  const networkSection = sesContent.slice(networkOutStart);
-
-  // Find net blocks by counting parentheses (more reliable than regex)
-  let pos = 0;
-  while (true) {
-    const netStart = networkSection.indexOf('(net ', pos);
-    if (netStart === -1) break;
-
-    // Find net name
-    const nameMatch = networkSection.slice(netStart).match(/\(net\s+(\w+)/);
-    if (!nameMatch) break;
-    const netName = nameMatch[1];
-
-    // Find where this net ends by counting parentheses
-    let depth = 0;
-    let netEnd = netStart;
-    for (let i = netStart; i < networkSection.length; i++) {
-      if (networkSection[i] === '(') depth++;
-      if (networkSection[i] === ')') depth--;
-      if (depth === 0) {
-        netEnd = i + 1;
-        break;
-      }
-    }
-
-    const netContent = networkSection.slice(netStart, netEnd);
-    pos = netEnd;
-
-    // Find all wire paths in this net
-    const wirePathRegex = /\(path\s+(\S+)\s+(\d+)\s+([\d\s\-]+)\)/g;
-    let pathMatch;
-
-    while ((pathMatch = wirePathRegex.exec(netContent)) !== null) {
-      const layerStr = pathMatch[1];
-      const width = parseInt(pathMatch[2], 10) * resolution;
-      const coordsStr = pathMatch[3].trim();
-      const coords = coordsStr.split(/\s+/).map(s => parseInt(s, 10));
-
-      // Convert layer name (F.Cu -> Top, B.Cu -> Bottom)
-      const layer = layerStr === 'B.Cu' ? 'Bottom' : 'Top';
-
-      // Create segments from coordinate pairs
-      const segments: { start_x: number; start_y: number; end_x: number; end_y: number }[] = [];
-      for (let i = 0; i < coords.length - 2; i += 2) {
-        segments.push({
-          start_x: coords[i] * resolution,
-          start_y: coords[i + 1] * resolution,
-          end_x: coords[i + 2] * resolution,
-          end_y: coords[i + 3] * resolution,
-        });
-      }
-
-      if (segments.length > 0) {
-        traces.push({
-          id: traces.length,
-          segments,
-          width,
-          layer,
-          net_name: netName,
-          locked: false,
-        });
-      }
-    }
-
-    // Find vias in this net
-    const viaRegex = /\(via\s+\w+\s+(\d+)\s+(\d+)\)/g;
-    let viaMatch;
-    while ((viaMatch = viaRegex.exec(netContent)) !== null) {
-      vias.push({
-        id: vias.length,
-        x: parseInt(viaMatch[1], 10) * resolution,
-        y: parseInt(viaMatch[2], 10) * resolution,
-        drill: 300_000,
-        outer_diameter: 600_000,
-        net_name: netName,
-      });
-    }
-  }
-
-  console.log('[SES Parser] Parsed', traces.length, 'traces,', vias.length, 'vias');
-  return { traces, vias };
-}
-
-// ============================================================================
-// Shared route-loading helpers
-// ============================================================================
-
-/**
- * Regenerate star-topology ratsnest for unrouted nets.
- * Called after load_source and after applying routes.
- */
-function regenerateRatsnest(snapshot: BoardSnapshot): void {
-  snapshot.ratsnest = [];
-  for (const net of snapshot.nets) {
-    if (net.connections.length < 2) continue;
-
-    const hasTraces = snapshot.traces.some(t => t.net_name === net.name);
-    if (hasTraces) continue;
-
-    const positions: { x: number; y: number }[] = [];
-    for (const conn of net.connections) {
-      const comp = snapshot.components.find(c => c.refdes === conn.component);
-      if (comp) {
-        const rad = ((comp.rotation_mdeg || 0) / 1000) * (Math.PI / 180);
-        const cos = Math.cos(rad);
-        const sin = Math.sin(rad);
-        const pad = comp.pads.find(p => p.number === conn.pin);
-        const px = pad?.x_nm ?? 0;
-        const py = pad?.y_nm ?? 0;
-        positions.push({
-          x: comp.x_nm + (px * cos - py * sin),
-          y: comp.y_nm + (px * sin + py * cos),
-        });
-      }
-    }
-
-    if (positions.length >= 2) {
-      for (let i = 1; i < positions.length; i++) {
-        snapshot.ratsnest.push({
-          start_x: positions[0].x,
-          start_y: positions[0].y,
-          end_x: positions[i].x,
-          end_y: positions[i].y,
-          net_name: net.name,
-        });
-      }
-    }
-  }
-}
-
-/**
- * Apply parsed routes to a snapshot: replace traces/vias and regenerate ratsnest.
- */
-function applyRoutesToSnapshot(
-  snapshot: BoardSnapshot,
-  sesContent: string,
-): void {
-  const { traces, vias } = parseSesFile(sesContent);
-  snapshot.traces = traces;
-  snapshot.vias = vias;
-  regenerateRatsnest(snapshot);
-}
 
 // ============================================================================
 // Geometry utilities (used by MockPcbEngine hit-testing and DRC)
@@ -687,9 +520,11 @@ export class WasmPcbEngineAdapter implements PcbEngine {
     return errors;
   }
 
-  load_routes(sesContent: string): void {
-    if (!this.cachedSnapshot) return;
-    applyRoutesToSnapshot(this.cachedSnapshot, sesContent);
+  load_ses(sesContent: string): string {
+    // The engine reads the session file and holds its copper. The viewer used
+    // to parse it here and keep the traces in its own copy of the board, with
+    // a ratsnest of its own that skipped every net with a trace on it.
+    return this.afterLoad(this.wasmEngine.load_ses(sesContent));
   }
 
   get_snapshot(): BoardSnapshot {
@@ -942,8 +777,9 @@ export class MockPcbEngine implements PcbEngine {
     return 'This build has no engine: the WASM module failed to load, and .kicad_pcb is read by the engine.';
   }
 
-  load_routes(sesContent: string): void {
-    applyRoutesToSnapshot(this.snapshot, sesContent);
+  load_ses(_sesContent: string): string {
+    // Same refusal, same reason: the session reader is in the engine.
+    return 'This build has no engine: the WASM module failed to load, and .ses is read by the engine.';
   }
 
   get_snapshot(): BoardSnapshot {

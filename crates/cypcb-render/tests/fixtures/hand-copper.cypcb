@@ -1,0 +1,28 @@
+version 1
+board hand_copper {
+    size 30mm x 20mm
+    layers 2
+}
+component R1 resistor "0402" {
+    value "10k"
+    at 5mm, 10mm
+}
+component C1 capacitor "0402" {
+    value "100nF"
+    at 20mm, 10mm
+}
+component R2 resistor "0402" {
+    value "10k"
+    at 12mm, 16mm
+}
+net VCC {
+    R1.2
+    C1.1
+    R2.1
+}
+trace VCC {
+    from R1.2
+    to C1.1
+    layer Top
+    width 0.3mm
+}

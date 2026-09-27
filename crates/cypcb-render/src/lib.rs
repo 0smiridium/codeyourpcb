@@ -1003,6 +1003,35 @@ impl PcbEngine {
             )
         })
     }
+
+    /// Put the routes of a Specctra session file on the board.
+    ///
+    /// The routes a server router sent back, or a `.ses` file the user opened,
+    /// used to go into the viewer's copy of the board only: the engine never
+    /// held them, so the ratsnest was worked out a second time in TypeScript
+    /// and the checker did not see the copper at all. They now land in the
+    /// world, as the FreeRouting runner puts them there, and the ratsnest and
+    /// the violations come back from the engine like any other copper. The
+    /// host writes them into the design with `export_traces_as_dsl`.
+    ///
+    /// Autorouted copper already on the board is cleared first. Returns an
+    /// empty string on success, or what went wrong.
+    pub fn load_ses(&mut self, ses: &str) -> String {
+        let nets: std::collections::HashMap<String, cypcb_world::NetId> = self
+            .world
+            .nets()
+            .map(|(id, name)| (name.to_string(), id))
+            .collect();
+        let result = match cypcb_router::import_ses_from_str(ses, &nets) {
+            Ok(result) => result,
+            Err(error) => return format!("The session file was not read: {error}"),
+        };
+        self.clear_autorouted_traces();
+        cypcb_router::apply_routes(&mut self.world, &result);
+        self.rebuild_spatial_index_full();
+        self.run_drc_internal();
+        String::new()
+    }
 }
 
 // Internal methods (not exposed to WASM)
@@ -1747,7 +1776,7 @@ impl PcbEngine {
         let vias = self.collect_vias();
 
         // Build ratsnest info (unrouted connections)
-        let ratsnest = self.collect_ratsnest(&nets);
+        let ratsnest = self.collect_ratsnest();
 
         // Build the copper the pours actually become
         let pours = self.collect_pours();
@@ -1994,93 +2023,80 @@ impl PcbEngine {
         vias
     }
 
-    /// Calculate ratsnest (unrouted connections).
+    /// The ratsnest: one line for each connection the copper still lacks.
     ///
-    /// For each net with multiple pins, if there are no traces connecting
-    /// all pins, we show ratsnest lines between unconnected pin pairs.
+    /// The pieces come from [`cypcb_drc::rules::copper_pieces`], the function
+    /// `check` reports `net-split` from and the router routes between, so a
+    /// pad joined by a hand-drawn trace draws no line and a pad nothing
+    /// reaches draws one. This used to skip every net with a trace on it: a
+    /// net wired by hand from R1 to C1 showed no line to R2, which `check`
+    /// still reported unrouted.
     ///
-    /// Simple algorithm: For nets with pins but no traces, show lines
-    /// from first pin to all other pins (star topology for visualization).
-    fn collect_ratsnest(&mut self, nets: &[NetInfo]) -> Vec<RatsnestInfo> {
-        use std::collections::HashMap;
-
+    /// The pieces of a net that hold a pad are joined by a shortest spanning
+    /// tree over the nearest pads of each two pieces: one line fewer than
+    /// there are pieces.
+    fn collect_ratsnest(&mut self) -> Vec<RatsnestInfo> {
         let mut ratsnest: Vec<RatsnestInfo> = Vec::new();
-
-        // Get trace count per net to determine if net is routed
-        let mut traces_per_net: HashMap<String, usize> = HashMap::new();
-        for trace in self.collect_traces() {
-            *traces_per_net.entry(trace.net_name.clone()).or_insert(0) += 1;
-        }
-
-        // For each net with connections
-        for net in nets {
-            if net.connections.len() < 2 {
-                continue; // Need at least 2 pins to show ratsnest
-            }
-
-            // If net has traces, assume it's at least partially routed
-            // (A full ratsnest would check actual connectivity, but this is MVP)
-            if traces_per_net.contains_key(&net.name) {
-                continue;
-            }
-
-            // Get pin positions
-            let mut pin_positions: Vec<(f64, f64)> = Vec::new();
-
-            for conn in &net.connections {
-                // Find the component
-                if let Some(entity) = self.world.find_by_refdes(&conn.component) {
-                    if let Some(pos) = self.world.get::<Position>(entity) {
-                        // Get the pad offset from footprint
-                        let footprint_name = self
-                            .world
-                            .get::<FootprintRef>(entity)
-                            .map(|f| f.as_str().to_string())
-                            .unwrap_or_default();
-
-                        let pad_offset = self.get_pad_offset(&footprint_name, &conn.pin);
-                        let rotation = self
-                            .world
-                            .get::<Rotation>(entity)
-                            .copied()
-                            .unwrap_or(Rotation::ZERO);
-                        let pin = cypcb_world::components::place_pad(pos.0, pad_offset, rotation);
-
-                        pin_positions.push((pin.x.0 as f64, pin.y.0 as f64));
-                    }
-                }
-            }
-
-            // Create star-topology ratsnest from first pin to all others
-            if pin_positions.len() >= 2 {
-                let (first_x, first_y) = pin_positions[0];
-                for (x, y) in pin_positions.iter().skip(1) {
-                    ratsnest.push(RatsnestInfo {
-                        start_x: first_x,
-                        start_y: first_y,
-                        end_x: *x,
-                        end_y: *y,
-                        net_name: net.name.clone(),
-                    });
-                }
+        for net in cypcb_drc::rules::copper_pieces(&mut self.world) {
+            let pieces: Vec<Vec<Point>> = net
+                .pieces_with_pads()
+                .map(|piece| piece.pins.iter().map(|pin| pin.at).collect())
+                .collect();
+            for (from, to) in spanning_links(&pieces) {
+                ratsnest.push(RatsnestInfo {
+                    start_x: from.x.0 as f64,
+                    start_y: from.y.0 as f64,
+                    end_x: to.x.0 as f64,
+                    end_y: to.y.0 as f64,
+                    net_name: net.name.clone(),
+                });
             }
         }
-
         ratsnest
     }
+}
 
-    /// Get pad offset from component origin for a given footprint and pin.
-    fn get_pad_offset(&self, footprint_name: &str, pin: &str) -> Point {
-        if let Some(fp) = self.footprint_lib.get(footprint_name) {
-            for pad in &fp.pads {
-                if pad.number == pin {
-                    return pad.position;
+/// The shortest links that join every piece into one: Prim's tree over the
+/// pieces, each link between the nearest two pads of the pieces it joins.
+/// One fewer link than pieces.
+fn spanning_links(pieces: &[Vec<Point>]) -> Vec<(Point, Point)> {
+    let nearest = |a: &[Point], b: &[Point]| -> (i128, Point, Point) {
+        let mut best = (i128::MAX, Point::ORIGIN, Point::ORIGIN);
+        for &p in a {
+            for &q in b {
+                let (dx, dy) = ((p.x.0 - q.x.0) as i128, (p.y.0 - q.y.0) as i128);
+                let d = dx * dx + dy * dy;
+                if d < best.0 {
+                    best = (d, p, q);
                 }
             }
         }
-        // Default to origin if pad not found
-        Point::ORIGIN
+        best
+    };
+    let mut links = Vec::new();
+    if pieces.len() < 2 {
+        return links;
     }
+    let mut joined = vec![false; pieces.len()];
+    joined[0] = true;
+    for _ in 1..pieces.len() {
+        let mut best: Option<(i128, Point, Point, usize)> = None;
+        for (i, inside) in pieces.iter().enumerate() {
+            for (j, outside) in pieces.iter().enumerate() {
+                if !joined[i] || joined[j] {
+                    continue;
+                }
+                let (d, p, q) = nearest(inside, outside);
+                if best.is_none_or(|(bd, ..)| d < bd) {
+                    best = Some((d, p, q, j));
+                }
+            }
+        }
+        let Some((_, p, q, j)) = best else { break };
+        joined[j] = true;
+        links.push((p, q));
+    }
+    links
 }
 
 impl Default for PcbEngine {
