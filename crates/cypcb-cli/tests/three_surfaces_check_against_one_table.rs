@@ -27,6 +27,16 @@ use cypcb_render::PcbEngine;
 /// outside its four-layer one (0.1mm), so the table used is readable off the
 /// clearance count.
 fn a_board(layers: u8, fab: Option<&str>) -> String {
+    a_board_with_trace_b(layers, fab, "5mm,10.237mm -> 15mm,10.237mm")
+}
+
+/// The same board with trace B crossing trace A: copper touching copper,
+/// which `route` reports on a line of its own.
+fn a_shorted_board(layers: u8, fab: Option<&str>) -> String {
+    a_board_with_trace_b(layers, fab, "10mm,8mm -> 10mm,12mm")
+}
+
+fn a_board_with_trace_b(layers: u8, fab: Option<&str>, trace_b: &str) -> String {
     let fab_line = fab.map_or(String::new(), |fab| format!("    fab {fab}\n"));
     format!(
         "version 1\n\n\
@@ -36,7 +46,7 @@ fn a_board(layers: u8, fab: Option<&str>) -> String {
          net A {{\n    R1.1\n    R2.1\n}}\n\n\
          net B {{\n    R1.2\n    R2.2\n}}\n\n\
          trace A {{\n    layer Top\n    width 0.127mm\n    path 5mm,10mm -> 15mm,10mm\n}}\n\n\
-         trace B {{\n    layer Top\n    width 0.127mm\n    path 5mm,10.237mm -> 15mm,10.237mm\n}}\n"
+         trace B {{\n    layer Top\n    width 0.127mm\n    path {trace_b}\n}}\n"
     )
 }
 
@@ -69,8 +79,9 @@ fn the_command(board: &Path) -> Verdict {
     }
 }
 
-/// The table `route` names in its DRC line, and the violations it counts.
-fn the_router(board: &Path) -> (String, usize) {
+/// The table `route` names in its DRC line, the violations it counts, and how
+/// many of them are copper touching copper.
+fn the_router(board: &Path) -> (String, usize, usize) {
     let routed = board.with_extension("routed.cypcb");
     let output = Command::new(env!("CARGO_BIN_EXE_cypcb"))
         .args(["route", "--in-house"])
@@ -87,8 +98,17 @@ fn the_router(board: &Path) -> (String, usize) {
     let (count, rest) = line
         .split_once(" violations against ")
         .unwrap_or_else(|| panic!("route did not name its table: {line}"));
-    let table = rest.split(',').next().expect("a table name").to_string();
-    (table, count.parse().expect("a violation count"))
+    let (table, touching) = rest.split_once(", ").expect("a table name");
+    let shorts = match touching.strip_suffix(" of them copper touching copper") {
+        Some(shorts) => shorts.parse().expect("a short count"),
+        None if touching == "none of them touching" => 0,
+        None => panic!("route said neither shorts nor none: {line}"),
+    };
+    (
+        table.to_string(),
+        count.parse().expect("a violation count"),
+        shorts,
+    )
 }
 
 /// The table `score` names, its row count and its clearance contacts.
@@ -178,9 +198,10 @@ fn the_three_surfaces_check_one_board_against_one_table() {
                 "{case}: `score` and `check` disagree"
             );
 
-            let (routed_against, routed_rows) = the_router(&board);
+            let (routed_against, routed_rows, shorts) = the_router(&board);
             assert_eq!(
-                routed_against, command.table,
+                (routed_against.as_str(), shorts),
+                (command.table.as_str(), 0),
                 "{case}: `route` and `check` disagree"
             );
             route_by_table.insert(command.table.clone(), routed_rows);
@@ -211,4 +232,37 @@ fn the_three_surfaces_check_one_board_against_one_table() {
         route_by_table.get("jlcpcb_standard_2layer") > route_by_table.get("jlcpcb_standard_4layer"),
         "{route_by_table:?}"
     );
+}
+
+/// `route` says a short on a line of its own, and names the table there too.
+#[test]
+fn route_names_the_table_when_copper_touches_copper() {
+    let dir = cypcb_fixtures::scratch_dir("cypcb-three-surfaces-short");
+    let mut tables = Vec::new();
+
+    for layers in [2u8, 4] {
+        for fab in [None, Some("oshpark")] {
+            let board = dir.join(format!("{layers}-{}.cypcb", fab.unwrap_or("none")));
+            std::fs::write(&board, a_shorted_board(layers, fab)).expect("the board is written");
+
+            let command = the_command(&board);
+            let (routed_against, _, shorts) = the_router(&board);
+            let case = format!("layers {layers}, fab {fab:?}");
+            assert!(
+                shorts > 0,
+                "{case}: the crossing traces are no short to `route`"
+            );
+            assert_eq!(
+                routed_against, command.table,
+                "{case}: `route` and `check` disagree"
+            );
+            tables.push(command.table);
+        }
+    }
+
+    // The control: more than one table is in play, so a line stuck on one
+    // table cannot pass by naming it.
+    tables.sort();
+    tables.dedup();
+    assert!(tables.len() > 1, "{tables:?}");
 }
