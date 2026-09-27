@@ -85,11 +85,18 @@ impl LibraryCommand {
                 // paths, so the directory being imported has to be one of them.
                 manager.add_kicad_search_path(directory.clone());
 
-                let imported = manager
+                let found = manager
                     .import_folder(&directory)
                     .into_diagnostic()
                     .wrap_err("importing the libraries in that directory")?;
+                let imported = &found.imported;
 
+                for (name, rows) in &found.gone {
+                    println!(
+                        "{name}: {rows} footprint(s) removed from the index: \
+                         its folder {name}.pretty is gone"
+                    );
+                }
                 if imported.is_empty() {
                     println!(
                         "No .pretty folder under {}: a KiCad footprint library is a folder \
@@ -104,7 +111,7 @@ impl LibraryCommand {
                 // counted apart.
                 let mut total = 0usize;
                 let mut refused = 0usize;
-                for (name, outcome) in &imported {
+                for (name, outcome) in imported {
                     for why in &outcome.rejected {
                         eprintln!("{why}");
                     }

@@ -9,6 +9,8 @@
 //! The key is source, library and name now, as KiCad keys a footprint, so
 //! both libraries keep theirs. A re-import left the rows of files deleted
 //! since, so the index held more than the import reported; they leave now.
+//! A whole `.pretty` folder deleted left every row it had; its library leaves
+//! now, when the directory that held it is imported again.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -54,7 +56,12 @@ fn cypcb(dir: &Path, args: &[&str]) -> (Option<i32>, String) {
 
 /// Run the import; the text it printed, and the count on its `Indexed` line.
 fn import(dir: &Path) -> (String, usize) {
-    let (code, said) = cypcb(dir, &["library", "import", "."]);
+    import_from(dir, ".")
+}
+
+/// [`import`] of `directory`, into the index in `dir`.
+fn import_from(dir: &Path, directory: &str) -> (String, usize) {
+    let (code, said) = cypcb(dir, &["library", "import", directory]);
     assert_eq!(code, Some(0), "{said}");
     let indexed = said
         .lines()
@@ -188,6 +195,83 @@ fn a_file_deleted_since_the_last_import_leaves_the_index() {
         gone.is_none(),
         "the deleted file's footprint is not in the index"
     );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_library_folder_deleted_since_the_last_import_leaves_the_index() {
+    let dir = libraries(
+        "folder-deleted",
+        &["A.pretty/SOT-23-5.kicad_mod", "B.pretty/SOT-23-5.kicad_mod"],
+    );
+    std::fs::write(
+        dir.join("B.pretty/SOT-23-6.kicad_mod"),
+        footprint("SOT-23-6"),
+    )
+    .expect("a second footprint");
+    let (said, first) = import(&dir);
+    assert_eq!((first, rows(&dir)), (3, 3), "{said}");
+
+    std::fs::remove_dir_all(dir.join("B.pretty")).expect("the folder goes");
+    let (said, again) = import(&dir);
+
+    assert_eq!(again, rows(&dir), "{said}");
+    assert_eq!(again, 1, "{said}");
+    assert!(
+        said.contains("B: 2 footprint(s) removed from the index: its folder B.pretty is gone"),
+        "{said}"
+    );
+    let (_, found) = cypcb(&dir, &["library", "search", "SOT-23"]);
+    assert!(
+        found.contains("kicad::A:SOT-23-5") && !found.contains("kicad::B:"),
+        "{found}"
+    );
+    let (_, listed) = cypcb(&dir, &["library", "list"]);
+    assert!(
+        listed.contains("A (kicad)") && !listed.contains("B (kicad)"),
+        "the library is gone too:\n{listed}"
+    );
+
+    std::fs::remove_dir_all(dir.join("A.pretty")).expect("the last folder goes");
+    let (code, said) = cypcb(&dir, &["library", "import", "."]);
+    assert_eq!(code, Some(0), "{said}");
+    assert!(
+        said.contains("A: 1 footprint(s) removed from the index: its folder A.pretty is gone"),
+        "{said}"
+    );
+    assert_eq!(rows(&dir), 0, "{said}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// One index can hold libraries from two directories. Importing one of them
+/// says nothing about the folders of the other.
+#[test]
+fn a_folder_gone_from_another_directory_stays_until_that_one_is_imported() {
+    let dir = libraries(
+        "two-directories",
+        &[
+            "one/A.pretty/SOT-23-5.kicad_mod",
+            "two/B.pretty/SOT-23-5.kicad_mod",
+        ],
+    );
+    import_from(&dir, "one");
+    import_from(&dir, "two");
+    assert_eq!(rows(&dir), 2);
+
+    std::fs::remove_dir_all(dir.join("one/A.pretty")).expect("the folder goes");
+    let (said, _) = import_from(&dir, "two");
+    assert!(!said.contains("removed"), "{said}");
+    assert_eq!(rows(&dir), 2, "{said}");
+
+    let (code, said) = cypcb(&dir, &["library", "import", "one"]);
+    assert_eq!(code, Some(0), "{said}");
+    assert!(
+        said.contains("A: 1 footprint(s) removed from the index: its folder A.pretty is gone"),
+        "{said}"
+    );
+    assert_eq!(rows(&dir), 1, "{said}");
 
     let _ = std::fs::remove_dir_all(&dir);
 }

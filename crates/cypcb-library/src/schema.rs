@@ -542,6 +542,37 @@ fn components_where(
     Ok(found)
 }
 
+/// Remove each library of `source` whose recorded folder `gone` holds for,
+/// with its components, in one transaction. Returns each one's name and the
+/// components removed with it, in name order.
+pub fn remove_libraries_where(
+    conn: &mut Connection,
+    source: &str,
+    gone: impl Fn(&str) -> bool,
+) -> Result<Vec<(String, usize)>, LibraryError> {
+    let tx = conn.transaction()?;
+    let recorded: Vec<(String, String)> = tx
+        .prepare(
+            "SELECT name, path FROM libraries WHERE source = ?1 AND path IS NOT NULL ORDER BY name",
+        )?
+        .query_map(params![source], |row| Ok((row.get(0)?, row.get(1)?)))?
+        .collect::<Result<_, _>>()?;
+    let mut removed = Vec::new();
+    for (name, folder) in recorded {
+        if !gone(&folder) {
+            continue;
+        }
+        let rows = delete_library_components(&tx, source, &name)?;
+        tx.execute(
+            "DELETE FROM libraries WHERE source = ?1 AND name = ?2",
+            params![source, name],
+        )?;
+        removed.push((name, rows));
+    }
+    tx.commit()?;
+    Ok(removed)
+}
+
 /// Delete all components for a library
 pub fn delete_library_components(
     conn: &Connection,
@@ -947,38 +978,57 @@ mod tests {
     }
 
     /// The schema before the library was part of the key, as a file written
-    /// then holds it.
-    const KEYED_BY_NAME: &str = r#"
-        CREATE TABLE libraries (
-            source TEXT NOT NULL, name TEXT NOT NULL, path TEXT, version TEXT,
-            enabled INTEGER NOT NULL DEFAULT 1, component_count INTEGER DEFAULT 0,
-            PRIMARY KEY (source, name));
-        CREATE TABLE components (
-            rowid INTEGER PRIMARY KEY AUTOINCREMENT,
-            source TEXT NOT NULL, name TEXT NOT NULL, library TEXT NOT NULL,
-            category TEXT, footprint_data TEXT, description TEXT, datasheet_url TEXT,
-            manufacturer TEXT, mpn TEXT, value TEXT, package TEXT, step_model_path TEXT,
-            metadata_json TEXT,
-            UNIQUE(source, name),
-            FOREIGN KEY (source, library) REFERENCES libraries(source, name));
-        CREATE INDEX idx_components_category ON components(category);
-        CREATE INDEX idx_components_manufacturer ON components(manufacturer);
-        CREATE INDEX idx_components_value ON components(value);
-        CREATE VIRTUAL TABLE components_fts USING fts5(
-            source, name, category, description, manufacturer, mpn, value, package);
-        CREATE TRIGGER components_ai AFTER INSERT ON components BEGIN
-            INSERT INTO components_fts(source, name, category, description, manufacturer, mpn, value, package)
-            VALUES (new.source, new.name, new.category, new.description, new.manufacturer, new.mpn, new.value, new.package);
-        END;
-        CREATE TRIGGER components_ad AFTER DELETE ON components BEGIN
-            DELETE FROM components_fts WHERE source = old.source AND name = old.name;
-        END;
+    /// then holds it, with three footprints in two libraries.
+    const KEYED_BY_NAME: &str = concat!(
+        include_str!("../../../tests/fixtures/library-index/schema-0.sql"),
+        r#"
         INSERT INTO libraries (source, name) VALUES ('kicad', 'A'), ('kicad', 'B');
         INSERT INTO components (source, name, library, footprint_data, metadata_json) VALUES
             ('kicad', 'SOT-23-5', 'A', '(footprint "SOT-23-5")', '{}'),
             ('kicad', 'R_0603', 'A', '(footprint "R_0603")', '{}'),
             ('kicad', 'C_0603', 'B', '(footprint "C_0603")', '{}');
-    "#;
+    "#
+    );
+
+    /// `cypcb library` opens the index with [`crate::LibraryManager::new`] and
+    /// moves an old file; a design reads it with `open_read_only` and leaves
+    /// it as it was.
+    #[test]
+    fn only_the_library_command_moves_an_old_file() {
+        let dir = std::env::temp_dir().join(format!("cypcb-old-read-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("cypcb-library.db");
+        let _ = std::fs::remove_file(&file);
+        Connection::open(&file)
+            .unwrap()
+            .execute_batch(KEYED_BY_NAME)
+            .unwrap();
+        let before = std::fs::read(&file).unwrap();
+        let version = |file: &std::path::Path| -> i64 {
+            Connection::open(file)
+                .unwrap()
+                .query_row("PRAGMA user_version", [], |row| row.get(0))
+                .unwrap()
+        };
+
+        let reader = crate::LibraryManager::open_read_only(&file).unwrap();
+        assert_eq!(
+            reader.footprint_names().unwrap(),
+            ["kicad::A:R_0603", "kicad::A:SOT-23-5", "kicad::B:C_0603"]
+        );
+        let found = reader.get_component("kicad", "B:C_0603").unwrap().unwrap();
+        assert_eq!(found.full_name(), "kicad::B:C_0603");
+        drop(reader);
+        assert!(
+            std::fs::read(&file).unwrap() == before,
+            "reading wrote the file"
+        );
+        assert_eq!(version(&file), 0);
+
+        crate::LibraryManager::new(&file).unwrap();
+        assert_eq!(version(&file), SCHEMA_VERSION);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 
     #[test]
     fn a_file_in_the_old_schema_keeps_every_row_and_takes_the_library_key() {
