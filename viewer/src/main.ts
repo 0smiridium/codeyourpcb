@@ -1429,6 +1429,12 @@ async function init(): Promise<void> {
         setupEditorSync(editorInstance);
 
         editorReady = true;
+        // Copper that reached the engine before the editor existed is not in
+        // `lastLoadedSource`. A `.ses` opened in the first seconds after a
+        // board skipped the editor sync, because there was no editor yet, and
+        // the text set above then held the board without it: the next edit
+        // reloaded that text and the routes were gone.
+        if (tracesUnsaved) syncEditorTraces();
         (window as any).__editor = editorInstance;
         console.log('[Editor] Monaco editor ready');
       })();
@@ -2106,6 +2112,14 @@ async function init(): Promise<void> {
     // so a board loaded through the hook showed the previous board's error
     // count until something else redrew it.
     if (snap.violations) updateErrorBadge(snap.violations);
+    // The file input puts the text into the editor as well. This hook did not,
+    // so an editor that was already up kept the previous board's text, and a
+    // test reading the editor read whichever board was there first.
+    if (editorReady && editorInstance) {
+      suppressSync = true;
+      editorInstance.setValue(source);
+      suppressSync = false;
+    }
     // Sync viewport + snapshot to interaction state so click handlers use correct coords
     interactionState.viewport = viewport;
     interactionState.snapshot = snapshot;
