@@ -572,6 +572,10 @@ pub struct FootprintLibrary {
     /// Footprints registered from a design source, mapped to whatever entry they
     /// shadowed, so [`clear_design`](FootprintLibrary::clear_design) can undo them.
     design_defined: HashMap<String, Option<Footprint>>,
+    /// Names a source was asked for and could not be read, with why. The sync
+    /// reports these instead of an unknown footprint: the name may well be in
+    /// a file nobody could open.
+    unreadable: HashMap<String, String>,
 }
 
 impl FootprintLibrary {
@@ -682,6 +686,17 @@ impl FootprintLibrary {
     #[inline]
     pub fn contains(&self, name: &str) -> bool {
         self.footprints.contains_key(name)
+    }
+
+    /// Record that `name` was asked of a source that could not be read.
+    pub fn mark_unreadable(&mut self, name: impl Into<String>, why: impl Into<String>) {
+        self.unreadable.insert(name.into(), why.into());
+    }
+
+    /// Why `name` is missing, when it was asked of a source that could not
+    /// be read.
+    pub fn why_unreadable(&self, name: &str) -> Option<&str> {
+        self.unreadable.get(name).map(String::as_str)
     }
 
     /// Register all built-in SMD footprints.

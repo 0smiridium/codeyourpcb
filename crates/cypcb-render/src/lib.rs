@@ -330,6 +330,7 @@ impl PcbEngine {
     /// of them. Anything the host did not supply comes back as the same
     /// unreadable-import error, saying what it did supply.
     #[cfg(any(feature = "native", feature = "wasm"))]
+    #[must_use = "the errors of a board that did not load are in this string"]
     pub fn load_source_with_imports(&mut self, source: &str, files_json: &str) -> String {
         let files: std::collections::HashMap<String, String> =
             match serde_json::from_str(files_json) {
@@ -344,6 +345,7 @@ impl PcbEngine {
     }
 
     #[cfg(any(feature = "native", feature = "wasm"))]
+    #[must_use = "the errors of a board that did not load are in this string"]
     pub fn load_source(&mut self, source: &str) -> String {
         // No host files: an import then reports that nothing was supplied,
         // which is a truer answer than the `unknown module` the design used to
@@ -2284,7 +2286,11 @@ mod tests {
         let source = "version 1\n\n\
                       board b {\n    size 30mm x 20mm\n    layers 2\n    fab jlpcb\n}\n";
         let mut engine = PcbEngine::new();
-        engine.load_source(source);
+        let loaded = engine.load_source(source);
+        assert!(
+            loaded.is_empty(),
+            "the board in this test does not load: {loaded}"
+        );
 
         let diagnostics = engine.get_diagnostics_json();
         assert!(
@@ -2802,11 +2808,15 @@ mod tests {
     #[test]
     fn test_trace_add_returns_valid_id() {
         let mut engine = PcbEngine::new();
-        engine.load_source(
+        let loaded = engine.load_source(
             r#"
             version 1
             board test { size 50mm x 30mm layers 2 }
             "#,
+        );
+        assert!(
+            loaded.is_empty(),
+            "the board in this test does not load: {loaded}"
         );
 
         // Add a horizontal trace: (5mm,5mm) → (20mm,5mm)
@@ -2819,11 +2829,15 @@ mod tests {
     #[test]
     fn test_trace_add_multiple() {
         let mut engine = PcbEngine::new();
-        engine.load_source(
+        let loaded = engine.load_source(
             r#"
             version 1
             board test { size 50mm x 30mm layers 2 }
             "#,
+        );
+        assert!(
+            loaded.is_empty(),
+            "the board in this test does not load: {loaded}"
         );
 
         let seg1 = [5_000_000i64, 5_000_000, 20_000_000, 5_000_000];
@@ -2838,11 +2852,15 @@ mod tests {
     #[test]
     fn test_trace_add_appears_in_snapshot() {
         let mut engine = PcbEngine::new();
-        engine.load_source(
+        let loaded = engine.load_source(
             r#"
             version 1
             board test { size 50mm x 30mm layers 2 }
             "#,
+        );
+        assert!(
+            loaded.is_empty(),
+            "the board in this test does not load: {loaded}"
         );
 
         let segments = [5_000_000i64, 5_000_000, 20_000_000, 5_000_000];
@@ -2860,11 +2878,15 @@ mod tests {
     #[test]
     fn test_trace_remove() {
         let mut engine = PcbEngine::new();
-        engine.load_source(
+        let loaded = engine.load_source(
             r#"
             version 1
             board test { size 50mm x 30mm layers 2 }
             "#,
+        );
+        assert!(
+            loaded.is_empty(),
+            "the board in this test does not load: {loaded}"
         );
 
         let segments = [5_000_000i64, 5_000_000, 20_000_000, 5_000_000];
@@ -2896,11 +2918,15 @@ mod tests {
     #[test]
     fn test_trace_get_at_point_hit() {
         let mut engine = PcbEngine::new();
-        engine.load_source(
+        let loaded = engine.load_source(
             r#"
             version 1
             board test { size 50mm x 30mm layers 2 }
             "#,
+        );
+        assert!(
+            loaded.is_empty(),
+            "the board in this test does not load: {loaded}"
         );
 
         // Horizontal trace from (5mm,10mm) to (25mm,10mm), 0.2mm wide
@@ -2915,11 +2941,15 @@ mod tests {
     #[test]
     fn test_trace_get_at_point_near() {
         let mut engine = PcbEngine::new();
-        engine.load_source(
+        let loaded = engine.load_source(
             r#"
             version 1
             board test { size 50mm x 30mm layers 2 }
             "#,
+        );
+        assert!(
+            loaded.is_empty(),
+            "the board in this test does not load: {loaded}"
         );
 
         // Horizontal trace at y=10mm, 0.2mm wide (so copper extends 0.1mm above/below)
@@ -2934,11 +2964,15 @@ mod tests {
     #[test]
     fn test_trace_get_at_point_miss() {
         let mut engine = PcbEngine::new();
-        engine.load_source(
+        let loaded = engine.load_source(
             r#"
             version 1
             board test { size 50mm x 30mm layers 2 }
             "#,
+        );
+        assert!(
+            loaded.is_empty(),
+            "the board in this test does not load: {loaded}"
         );
 
         let segments = [5_000_000i64, 10_000_000, 25_000_000, 10_000_000];
@@ -2952,11 +2986,15 @@ mod tests {
     #[test]
     fn test_trace_add_remove_add_cycle() {
         let mut engine = PcbEngine::new();
-        engine.load_source(
+        let loaded = engine.load_source(
             r#"
             version 1
             board test { size 50mm x 30mm layers 2 }
             "#,
+        );
+        assert!(
+            loaded.is_empty(),
+            "the board in this test does not load: {loaded}"
         );
 
         // Add → remove → add again
@@ -3001,11 +3039,15 @@ mod tests {
     #[test]
     fn test_trace_multi_segment() {
         let mut engine = PcbEngine::new();
-        engine.load_source(
+        let loaded = engine.load_source(
             r#"
             version 1
             board test { size 50mm x 30mm layers 2 }
             "#,
+        );
+        assert!(
+            loaded.is_empty(),
+            "the board in this test does not load: {loaded}"
         );
 
         // L-shaped trace: (5mm,5mm)→(15mm,5mm)→(15mm,15mm)
@@ -3038,11 +3080,15 @@ mod tests {
     #[test]
     fn test_run_drc_incremental() {
         let mut engine = PcbEngine::new();
-        engine.load_source(
+        let loaded = engine.load_source(
             r#"
             version 1
             board test { size 50mm x 30mm layers 2 }
             "#,
+        );
+        assert!(
+            loaded.is_empty(),
+            "the board in this test does not load: {loaded}"
         );
 
         let count = engine.run_drc_incremental();
@@ -3053,7 +3099,7 @@ mod tests {
     #[test]
     fn test_component_body_dimensions_from_footprint() {
         let mut engine = PcbEngine::new();
-        engine.load_source(
+        let loaded = engine.load_source(
             r#"
             version 1
             board test { size 50mm x 30mm layers 2 }
@@ -3062,6 +3108,10 @@ mod tests {
                 at 10mm, 10mm
             }
             "#,
+        );
+        assert!(
+            loaded.is_empty(),
+            "the board in this test does not load: {loaded}"
         );
 
         let snapshot = engine.build_snapshot();
@@ -3129,7 +3179,12 @@ mod tests {
     #[test]
     fn test_export_traces_empty() {
         let mut engine = PcbEngine::new();
-        engine.load_source("version 1\nboard t { size 50mm x 30mm; layers 2 }");
+        let loaded =
+            engine.load_source("version 1\nboard t {\n    size 50mm x 30mm\n    layers 2\n}");
+        assert!(
+            loaded.is_empty(),
+            "the board in this test does not load: {loaded}"
+        );
         let dsl = engine.export_traces_as_dsl();
         assert!(dsl.is_empty(), "Expected empty export, got: {}", dsl);
     }
@@ -3137,7 +3192,13 @@ mod tests {
     #[test]
     fn test_export_traces_basic() {
         let mut engine = PcbEngine::new();
-        engine.load_source("version 1\nboard t { size 50mm x 30mm; layers 2 }\nnet VCC { }");
+        let loaded = engine.load_source(
+            "version 1\nboard t {\n    size 50mm x 30mm\n    layers 2\n}\nnet VCC { }",
+        );
+        assert!(
+            loaded.is_empty(),
+            "the board in this test does not load: {loaded}"
+        );
 
         // Add a trace manually via the API
         let segments = [
@@ -3174,8 +3235,12 @@ mod tests {
     fn test_trace_round_trip_determinism() {
         // Phase 1: create engine, add traces, export to DSL
         let mut engine1 = PcbEngine::new();
-        engine1.load_source(
+        let loaded = engine1.load_source(
             "version 1\nboard t { size 60mm x 40mm\nlayers 2 }\nnet VCC { }\nnet GND { }",
+        );
+        assert!(
+            loaded.is_empty(),
+            "the board in this test does not load: {loaded}"
         );
 
         // Add traces with various coordinate values (including tricky float cases)
@@ -3234,8 +3299,12 @@ mod tests {
     #[test]
     fn test_export_traces_locked() {
         let mut engine = PcbEngine::new();
-        engine.load_source(
-            "version 1\nboard t { size 50mm x 30mm; layers 2 }\nnet VCC { }\ntrace VCC {\n    layer Top\n    width 0.25mm\n    path 5mm,10mm -> 15mm,10mm\n    locked\n}",
+        let loaded = engine.load_source(
+            "version 1\nboard t {\n    size 50mm x 30mm\n    layers 2\n}\nnet VCC { }\ntrace VCC {\n    layer Top\n    width 0.25mm\n    path 5mm,10mm -> 15mm,10mm\n    locked\n}",
+        );
+        assert!(
+            loaded.is_empty(),
+            "the board in this test does not load: {loaded}"
         );
 
         let dsl = engine.export_traces_as_dsl();
@@ -3245,7 +3314,13 @@ mod tests {
     #[test]
     fn test_export_traces_multi_layer() {
         let mut engine = PcbEngine::new();
-        engine.load_source("version 1\nboard t { size 50mm x 30mm; layers 2 }\nnet SIG { }");
+        let loaded = engine.load_source(
+            "version 1\nboard t {\n    size 50mm x 30mm\n    layers 2\n}\nnet SIG { }",
+        );
+        assert!(
+            loaded.is_empty(),
+            "the board in this test does not load: {loaded}"
+        );
 
         // Add traces on both layers
         let seg_top = [5_000_000i64, 10_000_000, 15_000_000, 10_000_000];

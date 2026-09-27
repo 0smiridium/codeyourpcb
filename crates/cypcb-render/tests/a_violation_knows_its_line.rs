@@ -64,7 +64,11 @@ fn a_violation_points_at_the_part_it_is_about() {
 #[test]
 fn a_board_with_nothing_wrong_locates_nothing() {
     let mut engine = PcbEngine::new();
-    engine.load_source("board demo {\n    size 20mm x 20mm\n    layers 2\n}\n");
+    let loaded = engine.load_source("board demo {\n    size 20mm x 20mm\n    layers 2\n}\n");
+    assert!(
+        loaded.is_empty(),
+        "the board in this test does not load: {loaded}"
+    );
     let violations: Vec<serde_json::Value> =
         serde_json::from_str(&engine.get_violations_json()).expect("violations are JSON");
     assert!(

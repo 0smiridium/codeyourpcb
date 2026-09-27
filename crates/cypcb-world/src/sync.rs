@@ -86,6 +86,19 @@ pub enum SyncError {
         span: miette::SourceSpan,
     },
 
+    /// A component's footprint was to come from a source that could not be
+    /// read, such as a library index that does not open.
+    UnreadableFootprint {
+        /// The footprint name the component uses.
+        name: String,
+        /// What could not be read, and why.
+        why: String,
+        /// Source code for miette display.
+        src: String,
+        /// Source span of the footprint reference.
+        span: miette::SourceSpan,
+    },
+
     /// A reference designator is used more than once.
     DuplicateRefDes {
         /// The duplicated refdes.
@@ -271,6 +284,7 @@ impl fmt::Display for SyncError {
             SyncError::UnknownFootprint { name, .. } => {
                 write!(f, "unknown footprint: '{}'", name)
             }
+            SyncError::UnreadableFootprint { why, .. } => write!(f, "{why}"),
             SyncError::DuplicateRefDes { refdes, .. } => {
                 write!(f, "duplicate reference designator: '{}'", refdes)
             }
@@ -365,6 +379,9 @@ impl Diagnostic for SyncError {
     fn code<'a>(&'a self) -> Option<Box<dyn fmt::Display + 'a>> {
         match self {
             SyncError::UnknownFootprint { .. } => Some(Box::new("cypcb::sync::unknown_footprint")),
+            SyncError::UnreadableFootprint { .. } => {
+                Some(Box::new("cypcb::sync::unreadable_footprint"))
+            }
             SyncError::DuplicateRefDes { .. } => Some(Box::new("cypcb::sync::duplicate_refdes")),
             SyncError::UnknownComponent { .. } => Some(Box::new("cypcb::sync::unknown_component")),
             SyncError::UnknownCoverageRegion { .. } => {
@@ -399,6 +416,9 @@ impl Diagnostic for SyncError {
             SyncError::UnknownFootprint { .. } => {
                 Some(Box::new("add this footprint to the library or use a built-in footprint like '0402', '0603', 'DIP-8'"))
             }
+            SyncError::UnreadableFootprint { name, .. } => Some(Box::new(format!(
+                "'{name}' is read from that file, so it cannot be looked up until the file reads"
+            ))),
             SyncError::DuplicateRefDes { .. } => {
                 Some(Box::new("each component must have a unique reference designator"))
             }
@@ -486,6 +506,7 @@ impl Diagnostic for SyncError {
     fn source_code(&self) -> Option<&dyn SourceCode> {
         match self {
             SyncError::UnknownFootprint { src, .. } => Some(src),
+            SyncError::UnreadableFootprint { src, .. } => Some(src),
             SyncError::DuplicateRefDes { src, .. } => Some(src),
             SyncError::UnknownComponent { src, .. } => Some(src),
             SyncError::UnknownCoverageRegion { src, .. } => Some(src),
@@ -510,6 +531,9 @@ impl Diagnostic for SyncError {
                     *span,
                 ))))
             }
+            SyncError::UnreadableFootprint { span, .. } => Some(Box::new(std::iter::once(
+                LabeledSpan::new_with_span(Some("footprint not read".to_string()), *span),
+            ))),
             SyncError::DuplicateRefDes {
                 first, duplicate, ..
             } => Some(Box::new(
@@ -1325,7 +1349,17 @@ fn sync_component(
 
     // Check footprint exists
     let footprint_name = &comp.footprint.value;
-    if !footprint_lib.contains(footprint_name) {
+    if let Some(why) = footprint_lib
+        .why_unreadable(footprint_name)
+        .filter(|_| !footprint_lib.contains(footprint_name))
+    {
+        result.errors.push(SyncError::UnreadableFootprint {
+            name: footprint_name.clone(),
+            why: why.to_string(),
+            src: source.to_string(),
+            span: span_to_source_span(&comp.footprint.span),
+        });
+    } else if !footprint_lib.contains(footprint_name) {
         result.errors.push(SyncError::UnknownFootprint {
             name: footprint_name.clone(),
             src: source.to_string(),
@@ -2656,6 +2690,15 @@ use A as TOP {
 }
 "#;
         let parsed = cypcb_parser::parse(source);
+        assert!(
+            parsed.errors.is_empty(),
+            "the board in this test does not parse: {:?}",
+            parsed
+                .errors
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+        );
         let mut world = BoardWorld::new();
         let mut library = FootprintLibrary::new();
         let result = sync_ast_to_world(&parsed.value, source, &mut world, &mut library);
@@ -2684,6 +2727,15 @@ use NoSuchThing as X {
 }
 "#;
         let parsed = cypcb_parser::parse(source);
+        assert!(
+            parsed.errors.is_empty(),
+            "the board in this test does not parse: {:?}",
+            parsed
+                .errors
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+        );
         let mut world = BoardWorld::new();
         let mut library = FootprintLibrary::new();
         let result = sync_ast_to_world(&parsed.value, source, &mut world, &mut library);
@@ -2730,6 +2782,15 @@ use M as A {
 }
 "#;
         let parsed = cypcb_parser::parse(source);
+        assert!(
+            parsed.errors.is_empty(),
+            "the board in this test does not parse: {:?}",
+            parsed
+                .errors
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+        );
         let mut world = BoardWorld::new();
         let mut library = FootprintLibrary::new();
         let result = sync_ast_to_world(&parsed.value, source, &mut world, &mut library);
@@ -2909,6 +2970,15 @@ trace SIG {
 }
 "#;
         let parsed = cypcb_parser::parse(source);
+        assert!(
+            parsed.errors.is_empty(),
+            "the board in this test does not parse: {:?}",
+            parsed
+                .errors
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+        );
         let mut world = BoardWorld::new();
         let mut library = FootprintLibrary::new();
         let result = sync_ast_to_world(&parsed.value, source, &mut world, &mut library);
@@ -3567,6 +3637,15 @@ board test { size 20mm x 20mm }
         let mut lib = FootprintLibrary::new();
 
         let first = parse(with_footprint);
+        assert!(
+            first.errors.is_empty(),
+            "the board in this test does not parse: {:?}",
+            first
+                .errors
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+        );
         let result = sync_ast_to_world(&first.value, with_footprint, &mut world, &mut lib);
         assert!(result.is_ok(), "sync errors: {:?}", result.errors);
         assert!(lib.contains("TEMP_PART"));
@@ -3574,6 +3653,15 @@ board test { size 20mm x 20mm }
         // Hot reload with the footprint deleted from the source: it must not
         // linger and keep resolving.
         let second = parse(without_footprint);
+        assert!(
+            second.errors.is_empty(),
+            "the board in this test does not parse: {:?}",
+            second
+                .errors
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+        );
         let result = sync_ast_to_world(&second.value, without_footprint, &mut world, &mut lib);
         assert!(result.is_ok(), "sync errors: {:?}", result.errors);
         assert!(!lib.contains("TEMP_PART"));

@@ -2571,6 +2571,15 @@ board test {
 }
 "#;
         let result = parse(source);
+        assert!(
+            result.errors.is_empty(),
+            "the board in this test does not parse: {:?}",
+            result
+                .errors
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+        );
         // Unitless dimensions default to mm
         if let Definition::Board(board) = &result.value.definitions[0] {
             let size = board.size.as_ref().expect("size should be present");
