@@ -213,6 +213,18 @@ fn the_ratsnest_counts_what_check_finds_missing_on_every_board() {
         assert!(status.contains("\"ok\":true"), "{fixture} routes: {status}");
         boards.push((format!("{fixture} after --fast"), engine.build_snapshot()));
     }
+    // The one benchmark board written in this language.
+    let source =
+        std::fs::read_to_string(repo().join("tests/fixtures/benchmark/esp32_starter.cypcb"))
+            .expect("the fixture reads");
+    let mut engine = loaded(&source);
+    boards.push(("esp32_starter as drawn".into(), engine.build_snapshot()));
+    let status = engine.auto_route();
+    assert!(
+        status.contains("\"ok\":true"),
+        "esp32_starter routes: {status}"
+    );
+    boards.push(("esp32_starter after --fast".into(), engine.build_snapshot()));
 
     let mut open = 0;
     for (name, snapshot) in &boards {

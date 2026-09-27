@@ -899,6 +899,21 @@ router's own count and does not read the rule. Measured 2026-09-23 by
 which replays the old elimination on `led_blink` and holds the rule to
 reporting the pin it cut off.
 
+**Two pads of one net whose copper touches are one piece.** KiCad joins them
+in its connectivity (`CN_VISITOR`, line 1072 of KiCad's pcbnew/connectivity/connectivity_algo.cpp, master,
+read 2026-09-27), and so does `copper_pieces`, which `net-split`,
+`unrouted-pin`, the router and the viewer's ratsnest read. KiCad's contact test
+is strict for circle against circle and circle against rectangle and inclusive
+for rectangle against rectangle (KiCad's libs/kimath/src/geometry/shape_collisions.cpp lines 51, 131 and
+787-795, and line 333 of KiCad's libs/kimath/include/math/box2.h); ours is
+one test, inclusive: a gap of zero, the gap at which `ClearanceRule` reports
+two nets shorted and the paste rule takes two openings of one net for one
+hole. On multi_ic this takes U5.2/U5.3, J2.4/J2.5 and J2.7/J2.8 out of
+`unrouted-pin`. Measured 2026-09-27 by
+`cargo test -p cypcb-render --test pads_that_touch_are_one_piece`, which also
+holds two pads of two nets edge to edge to a short and to two pieces, and two
+pads of one net 0.01mm apart to a ratsnest line.
+
 *The field R-11 would need does not exist:* `DrcViolation` has no severity, so
 the tiers below have nowhere to live in a row of output. See R-18.
 
@@ -2761,6 +2776,13 @@ J2.9 passes the deepest point of its own crossing: past the line of 0.5, it is
 not clipping the rim. Five of six do; the claim that a sharp entry on a circle
 clips its rim is now a claim about most of them, not all, and the one that
 does not is the case to read first.
+
+Since 2026-09-27, when two pads of one net that touch became one piece and
+`multi_ic` routes three GND connections fewer, there are **8 sharp entries
+among 180 into a circular land**: J4.2 and J5.2 came in at 0.06 of their
+chords each, on copper rerouted around those pairs. Seven of eight clip the
+rim; J2.9 is still the one that does not. Measured 2026-09-27 by
+`cargo test -p cypcb-autoroute --test sharp_entry_anatomy -- --ignored`.
 
 **One statement about these entries is forced and must never be reported as
 evidence.** The distance from a pad centre to the line of a segment is at most

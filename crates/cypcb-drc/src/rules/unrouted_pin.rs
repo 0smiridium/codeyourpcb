@@ -78,6 +78,17 @@ impl DrcRule for UnroutedPinRule {
             }
         }
 
+        // Which pads copper reaches, as `copper_pieces` joins them: a pad
+        // touching another pad of its net is reached by it. Asking the pieces
+        // keeps this rule, the ratsnest and the router on one answer.
+        let reached: std::collections::HashSet<(bevy_ecs::entity::Entity, String, i64, i64)> =
+            super::copper_pieces(world)
+                .into_iter()
+                .flat_map(|net| net.pieces)
+                .flat_map(|piece| piece.pins)
+                .filter(|pin| pin.reached)
+                .map(|pin| (pin.entity, pin.pin, pin.at.x.0, pin.at.y.0))
+                .collect();
         let mut violations = Vec::new();
 
         for (entity, refdes, footprint_ref, nets, position, rotation) in &components {
@@ -95,7 +106,9 @@ impl DrcRule for UnroutedPinRule {
 
                 let centre = pad_centre(pad, position, rotation);
                 let copper = pad_copper(pad, position.0, rotation.to_degrees());
-                if pad_is_reached(&traces, &vias, &pours, net, pad, &copper) {
+                if reached.contains(&(*entity, pad.number.clone(), centre.x.0, centre.y.0))
+                    || pad_is_reached(&traces, &vias, &pours, net, pad, &copper)
+                {
                     continue;
                 }
 

@@ -57,7 +57,9 @@ pub struct PiecePin {
     pub pin: String,
     /// The centre of the pad on the board.
     pub at: Point,
-    /// Whether `UnroutedPinRule` counts copper as reaching it.
+    /// Whether copper reaches it: a trace, a via, a pour or another pad of
+    /// its net that it touches. `UnroutedPinRule` reports the pads for which
+    /// this is false.
     pub reached: bool,
 }
 
@@ -315,6 +317,13 @@ pub fn copper_pieces(world: &mut BoardWorld) -> Vec<NetCopper> {
                         None => {}
                     }
                 }
+                // A pad that touches another pad of its net is reached by
+                // that pad's copper, the way it is reached by a trace.
+                if piece.pins.len() > 1 {
+                    for pin in &mut piece.pins {
+                        pin.reached = true;
+                    }
+                }
                 piece
             })
             .collect();
@@ -427,11 +436,12 @@ fn touches(one: &Feature, other: &Feature) -> bool {
         )
     };
     match (&one.shape, &other.shape) {
-        // A pad joins copper, not another pad. `UnroutedPinRule` counts a pad
-        // reached only by a trace, a via or a pour, so two pads whose copper
-        // touches are still two pads nothing reaches, and the ratsnest and the
-        // router have to see the connection `check` asks for between them.
-        (Shape::Pad(_), Shape::Pad(_)) => false,
+        // Two pads of one net whose copper touches are one land, as KiCad's
+        // connectivity joins them (`CN_VISITOR`, `connectivity_algo.cpp`,
+        // read 2026-09-27). Touching is a gap of zero, the gap at which
+        // `ClearanceRule` reports two nets shorted and the paste rule takes
+        // two openings of one net for one hole.
+        (Shape::Pad(_), Shape::Pad(_)) => copper_distance(&one.copper, &other.copper) == 0,
         (Shape::Segment(first), Shape::Segment(second)) => {
             let ((a1, a2), (b1, b2)) = (ends(first), ends(second));
             segment_distance(a1, a2, b1, b2) <= first.half_width + second.half_width

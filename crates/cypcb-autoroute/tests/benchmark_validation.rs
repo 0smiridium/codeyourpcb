@@ -398,10 +398,24 @@ type Ratchet = (&'static str, &'static str, u32, u32, u32, u32);
 /// until 2026-09-25: a mirror image of the files. Read the right way up the
 /// census is 12/0/0, 176/0/1, 296/8/3, 178/0/2, 176/0/2 and 62/0/0, 900
 /// entries in all with 8 refused and 8 sharp, and these are the figures held.
+///
+/// 296 / 8 / 3 -> 293 / 8 / 5 on `multi_ic` on 2026-09-27. Two pads of one net
+/// whose copper touches became one piece, so the router no longer routes
+/// between U5.2 and U5.3, J2.4 and J2.5, or J2.7 and J2.8, and the floor
+/// follows those three GND connections down. The rest of the board routes to
+/// different copper around them - 1115 routes to 1130 - and three entries
+/// sharpen that did not before: J4.2 at 43.7, J5.2 at 43.7 and C5.2 at 21.8
+/// degrees; C11.2 at 41.9 is gone. C5.2 is a VCC_3V3 trace laid across its
+/// land in this run, a short `trace 'VCC_3V3' <-> C5` at 0.00mm, and the GND
+/// trunk that ran straight through the pad bends inside it to pass that
+/// trace. No pad of the three pairs is entered sharp: the router reaches
+/// the pad it no longer routes to at its centre, as it reaches every pad,
+/// which `pads_that_touch_need_no_route` holds. The other five boards are
+/// unchanged.
 const ENTRY_CENSUS: [(usize, usize, usize); 6] = [
     (12, 0, 0),  // led_blink
     (176, 0, 1), // stm32_breakout
-    (296, 8, 3), // multi_ic
+    (293, 8, 5), // multi_ic
     (178, 0, 2), // shift_driver
     (176, 0, 2), // qfp_fanout
     (62, 0, 0),  // plane_board
