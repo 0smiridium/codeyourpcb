@@ -95,6 +95,9 @@ pub enum ExportError {
 
     #[error("Export failed: {0}")]
     Export(String),
+
+    #[error(transparent)]
+    Stamp(#[from] crate::stamp::StampError),
 }
 
 /// How a pour is filled for this job's fabricator.
@@ -157,6 +160,8 @@ pub fn run_export_with(
     library: &FootprintLibrary,
     teardrops: Option<cypcb_world::teardrop::TeardropRatios>,
 ) -> Result<ExportResult, ExportError> {
+    // A bad `SOURCE_DATE_EPOCH` stops the export before it writes a file.
+    crate::stamp::export_time()?;
     let start = Instant::now();
     let mut files = Vec::new();
     let mut warnings = Vec::new();

@@ -85,8 +85,10 @@ enum Commands {
     ///
     /// It is written because a fabricator asks when the files were cut, KiCad
     /// writes it too, and Ucamco's specification lists the attribute as
-    /// optional rather than unwanted. There is no flag to leave it out, so
-    /// anything comparing two exports has to drop the stamp itself.
+    /// optional rather than unwanted. With `SOURCE_DATE_EPOCH` set to whole
+    /// seconds since 1970-01-01 UTC, every file carries that moment instead,
+    /// so two exports of one board compare equal byte for byte. Any other
+    /// value stops the export.
     Export(commands::ExportCommand),
     /// Parse a KiCad .kicad_pcb file and output metadata as JSON
     ParseKicad(commands::ParseKicadCommand),

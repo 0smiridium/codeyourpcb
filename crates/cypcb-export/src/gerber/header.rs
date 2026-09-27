@@ -7,7 +7,6 @@
 //! and generating software for better traceability in manufacturing.
 
 use crate::coords::CoordinateFormat;
-use chrono::Utc;
 use cypcb_world::components::Layer;
 
 /// Copper layer side designation.
@@ -189,7 +188,7 @@ pub fn write_header(
     ));
 
     // TF.CreationDate
-    let now = Utc::now();
+    let now = crate::stamp::now();
     let iso_date = now.format("%Y-%m-%dT%H:%M:%S%z").to_string();
     header.push_str(&format!("G04 #@! TF.CreationDate,{}*\n", iso_date));
 
