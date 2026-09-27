@@ -32,6 +32,7 @@ getrandom_03 = { package = "getrandom", version = "0.3", features = ["wasm_js"] 
 # has to reach the fabrication files. Exporting them in this crate spends the
 # routing time once instead of twice.
 cypcb-export = { path = "../cypcb-export" }
+cypcb-fixtures = { path = "../cypcb-fixtures" }
 cypcb-core = { workspace = true }
 cypcb-drc = { path = "../cypcb-drc" }
 cypcb-kicad = { path = "../cypcb-kicad" }

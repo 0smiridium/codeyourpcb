@@ -17,6 +17,8 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
+use cypcb_fixtures::tree::tracked_dirs_in;
+
 fn workspace() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -29,8 +31,7 @@ fn workspace() -> PathBuf {
 fn manifests() -> Vec<(String, String)> {
     let mut found = Vec::new();
     let crates = workspace().join("crates");
-    for entry in std::fs::read_dir(&crates).expect("the crates directory exists") {
-        let path = entry.expect("a directory entry").path();
+    for path in tracked_dirs_in(&crates) {
         let manifest = path.join("Cargo.toml");
         if manifest.exists() {
             let name = path

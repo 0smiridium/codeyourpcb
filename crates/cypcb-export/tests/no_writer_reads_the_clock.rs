@@ -32,38 +32,27 @@ fn root() -> PathBuf {
 }
 
 /// Every line of code, as (path from the root, line number, text), in each
-/// `.rs` file under `dir`. Comment lines are left out: a comment that names
-/// the clock does not read it.
-fn code_lines(dir: &Path, out: &mut Vec<(String, usize, String)>) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            code_lines(&path, out);
-        } else if path.extension().is_some_and(|ext| ext == "rs") {
-            let text = std::fs::read_to_string(&path).expect("a source file reads");
-            let name = path
-                .strip_prefix(root())
-                .expect("under the root")
-                .to_string_lossy()
-                .into_owned();
-            for (number, line) in text.lines().enumerate() {
-                if !line.trim_start().starts_with("//") {
-                    out.push((name.clone(), number + 1, line.to_string()));
-                }
+/// `.rs` file under a crate's `src`. Comment lines are left out: a comment
+/// that names the clock does not read it.
+fn every_crate_source() -> Vec<(String, usize, String)> {
+    let mut out = Vec::new();
+    for path in cypcb_fixtures::tree::tracked_under(root().join("crates")) {
+        let name = path
+            .strip_prefix(root())
+            .expect("under the root")
+            .to_string_lossy()
+            .into_owned();
+        if name.split('/').nth(2) != Some("src") || path.extension().is_none_or(|ext| ext != "rs") {
+            continue;
+        }
+        let text = std::fs::read_to_string(&path).expect("a source file reads");
+        for (number, line) in text.lines().enumerate() {
+            if !line.trim_start().starts_with("//") {
+                out.push((name.clone(), number + 1, line.to_string()));
             }
         }
     }
-}
-
-fn every_crate_source() -> Vec<(String, usize, String)> {
-    let mut lines = Vec::new();
-    for dir in std::fs::read_dir(root().join("crates")).expect("the crates are there") {
-        code_lines(&dir.expect("a crate").path().join("src"), &mut lines);
-    }
-    lines
+    out
 }
 
 #[test]

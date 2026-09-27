@@ -139,9 +139,8 @@ fn every_figure_a_doc_block_states_is_a_figure_the_builder_is_given() {
     let mut checked_functions = 0;
     let mut checked_figures = 0;
 
-    let mut files: Vec<PathBuf> = std::fs::read_dir(footprint_dir())
-        .expect("the footprint modules are beside this crate's source")
-        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+    let mut files: Vec<PathBuf> = cypcb_fixtures::tree::tracked_in(footprint_dir())
+        .into_iter()
         .filter(|path| path.extension().is_some_and(|kind| kind == "rs"))
         .collect();
     files.sort();

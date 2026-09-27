@@ -53,7 +53,9 @@ fn exported(who: &str, args: &[&str]) -> BTreeSet<String> {
 }
 
 fn walk(root: &Path, at: &Path, into: &mut BTreeSet<String>) {
-    for entry in std::fs::read_dir(at).expect("the output directory is readable") {
+    for entry in
+        cypcb_fixtures::tree::written_entries(at).expect("the output directory is readable")
+    {
         let path = entry.expect("an entry").path();
         if path.is_dir() {
             walk(root, &path, into);

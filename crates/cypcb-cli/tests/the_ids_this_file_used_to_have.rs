@@ -62,24 +62,13 @@ fn published(text: &str, label: &str) -> usize {
 
 /// Every document under `.gsd/` except the requirements file itself.
 fn other_documents(root: &Path) -> Vec<PathBuf> {
-    let mut found = Vec::new();
-    let mut stack = vec![root.join(".gsd")];
-    while let Some(at) = stack.pop() {
-        let Ok(entries) = std::fs::read_dir(&at) else {
-            continue;
-        };
-        for entry in entries {
-            let path = entry.expect("a directory entry").path();
-            if path.is_dir() {
-                stack.push(path);
-            } else if path.extension().is_some_and(|e| e == "md")
+    cypcb_fixtures::tree::tracked_under(root.join(".gsd"))
+        .into_iter()
+        .filter(|path| {
+            path.extension().is_some_and(|e| e == "md")
                 && path.file_name().is_some_and(|n| n != "REQUIREMENTS.md")
-            {
-                found.push(path);
-            }
-        }
-    }
-    found
+        })
+        .collect()
 }
 
 #[test]

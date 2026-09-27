@@ -97,8 +97,7 @@ fn examples() -> Vec<(String, String)> {
         .join("../..")
         .join("examples");
     let mut out = Vec::new();
-    for entry in std::fs::read_dir(&dir).expect("the examples directory") {
-        let path = entry.expect("a directory entry").path();
+    for path in cypcb_fixtures::tree::tracked_in(&dir) {
         if path.extension().and_then(|e| e.to_str()) != Some("cypcb") {
             continue;
         }

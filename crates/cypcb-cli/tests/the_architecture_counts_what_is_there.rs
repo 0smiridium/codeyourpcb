@@ -37,11 +37,7 @@ fn routing_canon() -> String {
 
 #[test]
 fn the_crate_count_is_the_workspace_it_describes() {
-    let crates = std::fs::read_dir(repo_root().join("crates"))
-        .expect("the crates are there")
-        .filter_map(|entry| entry.ok())
-        .filter(|entry| entry.path().is_dir())
-        .count();
+    let crates = cypcb_fixtures::tree::tracked_dirs_in(repo_root().join("crates")).len();
     // `members = ["crates/*", "src-tauri"]`, so the desktop crate is the one
     // that does not live under `crates/`.
     let members = crates + 1;
@@ -129,7 +125,7 @@ fn the_export_file_count_is_what_export_writes() {
 /// Every file under a directory, at any depth - an export writes into
 /// subdirectories and a count of the top level would miss most of them.
 fn files_under(dir: &std::path::Path) -> usize {
-    let Ok(entries) = std::fs::read_dir(dir) else {
+    let Ok(entries) = cypcb_fixtures::tree::written_entries(dir) else {
         return 0;
     };
     entries

@@ -14,6 +14,8 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use cypcb_fixtures::tree::{tracked_in, written_entries};
+
 /// Help lines ending in a promised default, today 6.
 const PROMISES_FLOOR: usize = 5;
 
@@ -36,11 +38,7 @@ fn repo_root() -> PathBuf {
 fn files_promising_a_default() -> Vec<String> {
     let dir = repo_root().join("crates/cypcb-cli/src/commands");
     let mut found = Vec::new();
-    for entry in std::fs::read_dir(&dir)
-        .expect("the commands are there")
-        .flatten()
-    {
-        let path = entry.path();
+    for path in tracked_in(&dir) {
         if path.extension().is_none_or(|e| e != "rs") {
             continue;
         }
@@ -169,7 +167,7 @@ fn a_default_the_help_promises_is_where_the_file_lands() {
     assert!(
         work.join("board.kicad_pcb").is_file(),
         "to-kicad promises the input file with a .kicad_pcb suffix and wrote {:?}",
-        std::fs::read_dir(&work)
+        written_entries(&work)
             .map(|entries| entries.flatten().map(|e| e.file_name()).collect::<Vec<_>>())
             .unwrap_or_default()
     );
@@ -193,7 +191,7 @@ fn a_default_the_help_promises_is_where_the_file_lands() {
     assert!(
         back.join("imported.cypcb").is_file(),
         "from-kicad promises the input file with a .cypcb suffix and wrote {:?}",
-        std::fs::read_dir(&back)
+        written_entries(&back)
             .map(|entries| entries.flatten().map(|e| e.file_name()).collect::<Vec<_>>())
             .unwrap_or_default()
     );
@@ -215,13 +213,13 @@ fn a_default_the_help_promises_is_where_the_file_lands() {
         "export refused the board: {}",
         String::from_utf8_lossy(&run.stderr)
     );
-    let written = std::fs::read_dir(exported.join("output"))
+    let written = written_entries(exported.join("output"))
         .map(|entries| entries.flatten().count())
         .unwrap_or(0);
     assert!(
         written > 0,
         "export promises ./output and the working directory holds {:?}",
-        std::fs::read_dir(&exported)
+        written_entries(&exported)
             .map(|entries| entries.flatten().map(|e| e.file_name()).collect::<Vec<_>>())
             .unwrap_or_default()
     );
@@ -241,7 +239,7 @@ fn a_default_the_help_promises_is_where_the_file_lands() {
     assert!(
         drawn.join("case.cypcb").is_file(),
         "from-dxf promises the drawing with a .cypcb suffix and wrote {:?}",
-        std::fs::read_dir(&drawn)
+        written_entries(&drawn)
             .map(|entries| entries.flatten().map(|e| e.file_name()).collect::<Vec<_>>())
             .unwrap_or_default()
     );
@@ -269,7 +267,7 @@ fn a_default_the_help_promises_is_where_the_file_lands() {
     assert!(
         indexed.join("cypcb-library.db").is_file(),
         "library promises cypcb-library.db in this directory and it holds {:?}",
-        std::fs::read_dir(&indexed)
+        written_entries(&indexed)
             .map(|entries| entries.flatten().map(|e| e.file_name()).collect::<Vec<_>>())
             .unwrap_or_default()
     );

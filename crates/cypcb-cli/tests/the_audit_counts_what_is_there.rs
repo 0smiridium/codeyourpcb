@@ -200,7 +200,9 @@ fn the_paragraph_names_every_file_the_export_writes() {
     let mut written = Vec::new();
     let mut stack = vec![out.to_path_buf()];
     while let Some(dir) = stack.pop() {
-        for entry in std::fs::read_dir(&dir).expect("the export wrote a directory") {
+        for entry in
+            cypcb_fixtures::tree::written_entries(&dir).expect("the export wrote a directory")
+        {
             let path = entry.expect("a readable entry").path();
             if path.is_dir() {
                 stack.push(path);

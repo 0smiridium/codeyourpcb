@@ -33,11 +33,10 @@ fn architecture() -> String {
 
 /// Every crate directory in the workspace.
 fn crates() -> BTreeSet<String> {
-    std::fs::read_dir(repo_root().join("crates"))
-        .expect("the crates directory is there")
-        .filter_map(|entry| {
-            let path = entry.ok()?.path();
-            if !path.join("Cargo.toml").is_file() {
+    cypcb_fixtures::tree::tracked_dirs_in(repo_root().join("crates"))
+        .into_iter()
+        .filter_map(|path| {
+            if !cypcb_fixtures::tree::tracked_in(&path).contains(&path.join("Cargo.toml")) {
                 return None;
             }
             Some(path.file_name()?.to_string_lossy().to_string())

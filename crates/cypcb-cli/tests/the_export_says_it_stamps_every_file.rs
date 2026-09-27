@@ -40,7 +40,7 @@ fn run(args: &[&str]) -> String {
 fn written(dir: &Path, ends_with: &str) -> String {
     let mut stack = vec![dir.to_path_buf()];
     while let Some(next) = stack.pop() {
-        for entry in std::fs::read_dir(&next)
+        for entry in cypcb_fixtures::tree::written_entries(&next)
             .expect("the export directory is there")
             .flatten()
         {

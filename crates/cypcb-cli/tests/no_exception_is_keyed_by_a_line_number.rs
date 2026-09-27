@@ -15,6 +15,8 @@
 
 use std::path::{Path, PathBuf};
 
+use cypcb_fixtures::tree::tracked_under;
+
 /// Files read, today 768; a walk that found nothing would pass.
 const FILES_FLOOR: usize = 600;
 
@@ -29,24 +31,16 @@ fn repo_root() -> PathBuf {
 }
 
 fn source_files(dir: &Path, out: &mut Vec<PathBuf>) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        let name = entry.file_name();
-        if name == "node_modules" || name == "target" || name == "dist" || name == "pkg" {
-            continue;
-        }
-        if path.is_dir() {
-            source_files(&path, out);
-        } else if path
-            .extension()
-            .is_some_and(|e| EXTENSIONS.iter().any(|x| e == *x))
-        {
-            out.push(path);
-        }
-    }
+    let skip = ["node_modules", "target", "dist", "pkg"];
+    out.extend(tracked_under(dir).into_iter().filter(|path| {
+        path.strip_prefix(dir)
+            .unwrap_or(path)
+            .components()
+            .all(|part| !skip.iter().any(|name| part.as_os_str() == *name))
+            && path
+                .extension()
+                .is_some_and(|e| EXTENSIONS.iter().any(|x| e == *x))
+    }));
 }
 
 /// Whether a literal is a place given as a file and a line: `name.ext:12`.

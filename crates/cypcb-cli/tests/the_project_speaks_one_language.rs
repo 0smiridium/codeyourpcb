@@ -55,32 +55,23 @@ fn shipped_text(root: &Path) -> Vec<PathBuf> {
         "rs", "ts", "js", "mjs", "md", "toml", "json", "html", "css", "cypcb", "sh", "bat", "yml",
         "yaml", "c", "h",
     ];
-    let mut found = Vec::new();
-    let mut stack = vec![root.to_path_buf()];
-    while let Some(at) = stack.pop() {
-        let Ok(entries) = std::fs::read_dir(&at) else {
-            continue;
-        };
-        for entry in entries {
-            let path = entry.expect("a directory entry").path();
-            let name = path
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or_default()
-                .to_string();
-            if path.is_dir() {
-                if !skip_dir.contains(&name.as_str()) {
-                    stack.push(path);
-                }
-            } else if path
+    let tree_root = cypcb_fixtures::tree::repo_root();
+    let mut found: Vec<PathBuf> = cypcb_fixtures::tree::tracked_under(root)
+        .into_iter()
+        .filter_map(|path| {
+            let relative = path.strip_prefix(&tree_root).ok()?.to_path_buf();
+            let skipped = relative
+                .parent()
+                .into_iter()
+                .flat_map(Path::components)
+                .any(|part| skip_dir.contains(&part.as_os_str().to_str().unwrap_or_default()));
+            let is_text = relative
                 .extension()
                 .and_then(|e| e.to_str())
-                .is_some_and(|e| text.contains(&e))
-            {
-                found.push(path);
-            }
-        }
-    }
+                .is_some_and(|e| text.contains(&e));
+            (!skipped && is_text).then(|| root.join(relative))
+        })
+        .collect();
     found.sort();
     found
 }

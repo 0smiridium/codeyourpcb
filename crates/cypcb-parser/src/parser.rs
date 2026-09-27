@@ -3741,9 +3741,7 @@ assert R1.value within 10kohm +/- 5%
             .join("examples");
 
         let mut files_tested = 0;
-        for entry in std::fs::read_dir(&examples_dir).expect("examples dir should exist") {
-            let entry = entry.unwrap();
-            let path = entry.path();
+        for path in cypcb_fixtures::tree::tracked_in(&examples_dir) {
             if path.extension().is_some_and(|ext| ext == "cypcb") {
                 let filename = path.file_name().unwrap().to_string_lossy().to_string();
                 let source = std::fs::read_to_string(&path)

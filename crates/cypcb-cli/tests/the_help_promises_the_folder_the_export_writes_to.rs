@@ -110,7 +110,7 @@ fn the_help_promises_the_folder_the_export_writes_to() {
             String::from_utf8_lossy(&run.stderr)
         );
 
-        let written = std::fs::read_dir(out.join(folder))
+        let written = cypcb_fixtures::tree::written_entries(out.join(folder))
             .map(|entries| entries.flatten().count())
             .unwrap_or(0);
         if written == 0 {
@@ -172,7 +172,7 @@ fn one_file_per_copper_layer_is_one_per_layer_the_board_declares() {
             String::from_utf8_lossy(&run.stderr)
         );
 
-        let mut drawn: Vec<String> = std::fs::read_dir(out.join("plot"))
+        let mut drawn: Vec<String> = cypcb_fixtures::tree::written_entries(out.join("plot"))
             .expect("the plot folder is there")
             .flatten()
             .map(|entry| entry.file_name().to_string_lossy().to_string())

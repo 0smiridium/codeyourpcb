@@ -68,4 +68,5 @@ wasm-opt = false
 [dev-dependencies]
 # Test-only: proves the viewer and the Gerber get the same copper.
 cypcb-export = { path = "../cypcb-export" }
+cypcb-fixtures = { path = "../cypcb-fixtures" }
 serde_json = { workspace = true }

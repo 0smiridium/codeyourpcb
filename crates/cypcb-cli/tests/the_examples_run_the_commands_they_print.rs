@@ -66,12 +66,9 @@ fn advertised(source: &str) -> Vec<Vec<String>> {
 #[test]
 fn every_command_an_example_prints_is_one_that_runs() {
     let root = repo_root();
-    let mut entries: Vec<PathBuf> = std::fs::read_dir(root.join("examples"))
-        .expect("the examples directory is there")
-        .filter_map(|entry| {
-            let path = entry.ok()?.path();
-            (path.extension()? == "cypcb").then_some(path)
-        })
+    let mut entries: Vec<PathBuf> = cypcb_fixtures::tree::tracked_in(root.join("examples"))
+        .into_iter()
+        .filter(|path| path.extension().is_some_and(|ext| ext == "cypcb"))
         .collect();
     entries.sort();
 

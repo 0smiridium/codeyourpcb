@@ -209,9 +209,9 @@ fn stm32_breakout() {
 #[test]
 fn every_benchmark_board_is_held_to_it() {
     let this_file = include_str!("route_and_check_count_the_same_board.rs");
-    let mut boards: Vec<String> = std::fs::read_dir(fixture(""))
-        .expect("the benchmark directory is there")
-        .filter_map(|entry| entry.ok()?.file_name().into_string().ok())
+    let mut boards: Vec<String> = cypcb_fixtures::tree::tracked_in(fixture(""))
+        .into_iter()
+        .filter_map(|path| path.file_name()?.to_str().map(str::to_owned))
         .filter(|name| name.ends_with(".kicad_pcb") || name.ends_with(".cypcb"))
         .collect();
     boards.sort();

@@ -33,9 +33,8 @@ const NOT_YET: &[(&str, &str)] = &[
 ];
 
 fn covered_examples() -> Vec<PathBuf> {
-    let mut files: Vec<PathBuf> = std::fs::read_dir(examples_dir())
-        .expect("the examples directory is there")
-        .filter_map(|entry| entry.ok().map(|e| e.path()))
+    let mut files: Vec<PathBuf> = cypcb_fixtures::tree::tracked_in(examples_dir())
+        .into_iter()
         .filter(|path| path.extension().is_some_and(|ext| ext == "cypcb"))
         .filter(|path| {
             let name = path

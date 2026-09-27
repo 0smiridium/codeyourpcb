@@ -17,9 +17,8 @@ use cypcb_world::components::trace::{Trace, TraceSource};
 
 fn benchmark() -> Vec<PathBuf> {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/benchmark");
-    let mut files: Vec<PathBuf> = std::fs::read_dir(dir)
-        .expect("the benchmark")
-        .filter_map(|e| e.ok().map(|e| e.path()))
+    let mut files: Vec<PathBuf> = cypcb_fixtures::tree::tracked_in(dir)
+        .into_iter()
         .filter(|p| p.extension().is_some_and(|e| e == "kicad_pcb"))
         .collect();
     files.sort();

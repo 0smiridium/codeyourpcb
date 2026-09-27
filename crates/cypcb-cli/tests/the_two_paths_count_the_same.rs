@@ -33,9 +33,8 @@ fn repo_root() -> PathBuf {
 /// imports - the browser hands it the files it has open, which a test with no
 /// browser cannot do.
 fn readable_examples() -> Vec<PathBuf> {
-    let mut files: Vec<PathBuf> = std::fs::read_dir(repo_root().join("examples"))
-        .expect("the examples are there")
-        .filter_map(|entry| entry.ok().map(|e| e.path()))
+    let mut files: Vec<PathBuf> = cypcb_fixtures::tree::tracked_in(repo_root().join("examples"))
+        .into_iter()
         .filter(|path| path.extension().is_some_and(|ext| ext == "cypcb"))
         .collect();
     files.sort();

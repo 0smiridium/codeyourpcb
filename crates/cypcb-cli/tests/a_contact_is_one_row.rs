@@ -21,6 +21,7 @@
 use std::path::{Path, PathBuf};
 
 use cypcb_drc::{run_drc, PresetRules, ViolationKind};
+use cypcb_fixtures::tree::tracked_in;
 use cypcb_rules::presets::RulesPreset;
 use cypcb_world::components::trace::{Trace, TraceSegment};
 use cypcb_world::footprint::FootprintLibrary;
@@ -299,9 +300,9 @@ fn stm32_breakout() {
 #[test]
 fn every_benchmark_board_is_cut() {
     let this_file = include_str!("a_contact_is_one_row.rs");
-    let mut boards: Vec<String> = std::fs::read_dir(fixture(""))
-        .expect("the benchmark directory is there")
-        .filter_map(|entry| entry.ok()?.file_name().into_string().ok())
+    let mut boards: Vec<String> = tracked_in(fixture(""))
+        .into_iter()
+        .filter_map(|path| path.file_name()?.to_str().map(str::to_owned))
         .filter(|name| name.ends_with(".kicad_pcb") || name.ends_with(".cypcb"))
         .collect();
     boards.sort();

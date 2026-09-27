@@ -106,7 +106,9 @@ fn the_dry_run_names_this_boards_files_too() {
     let mut written = Vec::new();
     let mut stack = vec![out.to_path_buf()];
     while let Some(at) = stack.pop() {
-        for entry in std::fs::read_dir(&at).expect("the output directory is readable") {
+        for entry in
+            cypcb_fixtures::tree::written_entries(&at).expect("the output directory is readable")
+        {
             let path = entry.expect("a directory entry").path();
             if path.is_dir() {
                 stack.push(path);

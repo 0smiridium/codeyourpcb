@@ -89,7 +89,9 @@ fn nothing_a_house_builds_from_carries_it() {
     // legend would print `40.000mm` across a finished board.
     let gerber = out.join("gerber");
     let mut checked = 0;
-    for entry in std::fs::read_dir(&gerber).expect("the gerber directory exists") {
+    for entry in
+        cypcb_fixtures::tree::written_entries(&gerber).expect("the gerber directory exists")
+    {
         let path = entry.expect("a directory entry").path();
         let body = std::fs::read_to_string(&path).expect("the file is readable");
         assert!(

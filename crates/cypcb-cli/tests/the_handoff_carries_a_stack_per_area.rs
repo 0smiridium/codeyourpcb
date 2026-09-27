@@ -259,7 +259,7 @@ fn the_job_file_says_it_is_flattening_the_stack() {
 /// run wrote into.
 fn job_file(dir: &std::path::Path) -> String {
     let out = dir.join("out");
-    let path = std::fs::read_dir(&out)
+    let path = cypcb_fixtures::tree::written_entries(&out)
         .expect("the export wrote its directory")
         .filter_map(Result::ok)
         .map(|entry| entry.path())

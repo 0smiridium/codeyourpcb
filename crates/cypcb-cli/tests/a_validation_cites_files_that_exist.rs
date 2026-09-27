@@ -18,6 +18,8 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
+use cypcb_fixtures::tree::{tracked_dirs_in, tracked_in, tracked_under};
+
 fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -29,47 +31,31 @@ fn repo_root() -> PathBuf {
 /// Every file name in the repository, ignoring what a build put there.
 fn basenames(root: &Path) -> BTreeSet<String> {
     let skip = ["target", "node_modules", ".git", "dist", "test-results"];
-    let mut names = BTreeSet::new();
-    let mut stack = vec![root.to_path_buf()];
-    while let Some(at) = stack.pop() {
-        let Ok(entries) = std::fs::read_dir(&at) else {
-            continue;
-        };
-        for entry in entries {
-            let path = entry.expect("a directory entry").path();
-            let name = match path.file_name().and_then(|n| n.to_str()) {
-                Some(name) => name.to_string(),
-                None => continue,
-            };
-            if path.is_dir() {
-                if !skip.contains(&name.as_str()) {
-                    stack.push(path);
-                }
-            } else {
-                names.insert(name);
-            }
-        }
-    }
-    names
+    tracked_under(root)
+        .into_iter()
+        .filter(|path| {
+            path.strip_prefix(root)
+                .unwrap_or(path)
+                .parent()
+                .is_none_or(|dirs| {
+                    dirs.components()
+                        .all(|part| !skip.iter().any(|dir| part.as_os_str() == *dir))
+                })
+        })
+        .filter_map(|path| {
+            path.file_name()
+                .and_then(|n| n.to_str())
+                .map(str::to_string)
+        })
+        .collect()
 }
 
 /// The validation documents, one per milestone that has one.
 fn validations(root: &Path) -> Vec<PathBuf> {
     let mut found = Vec::new();
     let milestones = root.join(".gsd").join("milestones");
-    let Ok(entries) = std::fs::read_dir(&milestones) else {
-        return found;
-    };
-    for entry in entries {
-        let dir = entry.expect("a directory entry").path();
-        if !dir.is_dir() {
-            continue;
-        }
-        let Ok(inner) = std::fs::read_dir(&dir) else {
-            continue;
-        };
-        for file in inner {
-            let path = file.expect("a directory entry").path();
+    for dir in tracked_dirs_in(&milestones) {
+        for path in tracked_in(&dir) {
             if path
                 .file_name()
                 .and_then(|n| n.to_str())

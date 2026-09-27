@@ -119,20 +119,21 @@ fn route_and_export() -> DrillFiles {
         String::from_utf8_lossy(&export.stderr)
     );
 
-    let mut files: Vec<(String, Vec<String>)> = std::fs::read_dir(dir.join("drill"))
-        .expect("a drill directory")
-        .filter_map(|e| e.ok())
-        .map(|entry| {
-            let name = entry.file_name().to_string_lossy().to_string();
-            let body = std::fs::read_to_string(entry.path()).expect("a readable drill file");
-            let hits: Vec<String> = body
-                .lines()
-                .filter(|line| line.starts_with('X'))
-                .map(|line| line.to_string())
-                .collect();
-            (name, hits)
-        })
-        .collect();
+    let mut files: Vec<(String, Vec<String>)> =
+        cypcb_fixtures::tree::written_entries(dir.join("drill"))
+            .expect("a drill directory")
+            .filter_map(|e| e.ok())
+            .map(|entry| {
+                let name = entry.file_name().to_string_lossy().to_string();
+                let body = std::fs::read_to_string(entry.path()).expect("a readable drill file");
+                let hits: Vec<String> = body
+                    .lines()
+                    .filter(|line| line.starts_with('X'))
+                    .map(|line| line.to_string())
+                    .collect();
+                (name, hits)
+            })
+            .collect();
     files.sort();
     (dir, files)
 }

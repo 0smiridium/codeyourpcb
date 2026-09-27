@@ -82,9 +82,11 @@ fn project(who: &str) -> cypcb_fixtures::ScratchDir {
     let from = repo_root().join("tests/fixtures/kicad-tools/tests/fixtures/Test_Library.pretty");
     let to = dir.join("libraries/Test_Library.pretty");
     std::fs::create_dir_all(&to).expect("a place to work");
-    for entry in std::fs::read_dir(&from).expect("the fixture library is there") {
-        let entry = entry.expect("an entry");
-        std::fs::copy(entry.path(), to.join(entry.file_name())).expect("a file to copy");
+    let files = cypcb_fixtures::tree::tracked_in(&from);
+    assert!(!files.is_empty(), "the fixture library is there");
+    for path in files {
+        let name = path.file_name().expect("a file name");
+        std::fs::copy(&path, to.join(name)).expect("a file to copy");
     }
     std::fs::write(
         dir.join("board.cypcb"),

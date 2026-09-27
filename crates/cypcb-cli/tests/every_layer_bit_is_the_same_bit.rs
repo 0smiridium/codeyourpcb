@@ -15,6 +15,7 @@
 
 use std::path::{Path, PathBuf};
 
+use cypcb_fixtures::tree::{tracked_dirs_in, tracked_under};
 use cypcb_world::Layer;
 
 /// Sites that turn a layer into a bit with a literal offset, today 5.
@@ -32,17 +33,11 @@ fn repo_root() -> PathBuf {
 }
 
 fn source_files(dir: &Path, out: &mut Vec<PathBuf>) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            source_files(&path, out);
-        } else if path.extension().is_some_and(|e| e == "rs" || e == "ts") {
-            out.push(path);
-        }
-    }
+    out.extend(
+        tracked_under(dir)
+            .into_iter()
+            .filter(|path| path.extension().is_some_and(|e| e == "rs" || e == "ts")),
+    );
 }
 
 /// The literal in a shift written as `1 << (2 + x)` or `1 << (x + 2)`.
@@ -72,11 +67,8 @@ fn every_layer_bit_is_the_same_bit() {
 
     let root = repo_root();
     let mut files = Vec::new();
-    for entry in std::fs::read_dir(root.join("crates")).expect("the crates directory is there") {
-        let src = entry.expect("a readable entry").path().join("src");
-        if src.is_dir() {
-            source_files(&src, &mut files);
-        }
+    for krate in tracked_dirs_in(root.join("crates")) {
+        source_files(&krate.join("src"), &mut files);
     }
     source_files(&root.join("viewer/src"), &mut files);
     files.sort();

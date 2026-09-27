@@ -179,7 +179,11 @@ fn the_list_is_the_commands_own() {
     let mut names: Vec<String> = Vec::new();
     let mut stack = vec![real.to_path_buf()];
     while let Some(dir) = stack.pop() {
-        for entry in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
+        for entry in cypcb_fixtures::tree::written_entries(&dir)
+            .into_iter()
+            .flatten()
+            .flatten()
+        {
             let path = entry.path();
             if path.is_dir() {
                 stack.push(path);

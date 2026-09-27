@@ -16,7 +16,7 @@ use cypcb_world::footprint::{Footprint, FootprintLibrary};
 use cypcb_world::{sync_ast_to_world, BoardWorld};
 
 fn repo_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
+    cypcb_fixtures::tree::repo_root()
 }
 
 /// A corpus path as the repository names it.
@@ -36,18 +36,8 @@ fn shown(path: &Path) -> String {
 /// clone passed.
 fn corpus(extension: &str) -> Vec<PathBuf> {
     let root = repo_root();
-    let output = std::process::Command::new("git")
-        .args(["ls-files", "-z"])
-        .current_dir(&root)
-        .output()
-        .expect("git ls-files: the suite runs from a checkout, so git must answer");
-    assert!(
-        output.status.success(),
-        "git ls-files failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let mut found: Vec<PathBuf> = String::from_utf8_lossy(&output.stdout)
-        .split('\0')
+    let mut found: Vec<PathBuf> = cypcb_fixtures::tree::files_git_tracks(&root)
+        .into_iter()
         .filter(|file| file.ends_with(extension))
         .filter(|file| {
             !file

@@ -22,4 +22,5 @@ walkdir = "2"
 cypcb-parser = { path = "../cypcb-parser" }
 cypcb-world = { path = "../cypcb-world", features = ["sync"] }
 cypcb-autoroute = { path = "../cypcb-autoroute" }
+cypcb-fixtures = { path = "../cypcb-fixtures" }
 tempfile = "3"

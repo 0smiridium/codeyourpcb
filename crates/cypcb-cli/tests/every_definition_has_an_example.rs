@@ -21,6 +21,8 @@
 
 use std::path::{Path, PathBuf};
 
+use cypcb_fixtures::tree::tracked_in;
+
 fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -98,8 +100,7 @@ fn every_definition_the_grammar_has_appears_in_some_example() {
 
     let dir = repo_root().join("examples");
     let mut sources: Vec<(String, String)> = Vec::new();
-    for entry in std::fs::read_dir(&dir).expect("the examples are there") {
-        let path = entry.expect("an entry").path();
+    for path in tracked_in(&dir) {
         if path.extension().is_some_and(|ext| ext == "cypcb") {
             let name = path
                 .file_name()
@@ -175,8 +176,7 @@ fn every_property_a_block_takes_is_in_some_example() {
         .expect("the reader is in the repo");
     let dir = repo_root().join("examples");
     let mut sources = String::new();
-    for entry in std::fs::read_dir(&dir).expect("the examples are there") {
-        let path = entry.expect("an entry").path();
+    for path in tracked_in(&dir) {
         if path.extension().is_some_and(|ext| ext == "cypcb") {
             sources.push_str(&std::fs::read_to_string(&path).expect("an example is readable"));
             sources.push('\n');

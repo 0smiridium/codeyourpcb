@@ -21,7 +21,7 @@
 //! - in a comment, exactly the errors the file had before.
 
 use std::panic::{catch_unwind, AssertUnwindSafe};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use cypcb_parser::{parse, ParseError};
 
@@ -32,29 +32,12 @@ const INSERTED: [char; 3] = ['\u{105}', '\u{2014}', '\u{1F600}'];
 const POSITIONS_PER_FILE: usize = 240;
 
 fn repo_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../..")
-        .canonicalize()
-        .expect("the crate sits two levels below the repo root")
+    cypcb_fixtures::tree::repo_root()
 }
 
 /// Every `.cypcb` under the folders that hold designs: examples, test
 /// fixtures and the viewer's templates.
 fn designs() -> Vec<PathBuf> {
-    fn walk(dir: &Path, found: &mut Vec<PathBuf>) {
-        let Ok(entries) = std::fs::read_dir(dir) else {
-            return;
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                walk(&path, found);
-            } else if path.extension().is_some_and(|ext| ext == "cypcb") {
-                found.push(path);
-            }
-        }
-    }
-    let root = repo_root();
     let mut found = Vec::new();
     for dir in [
         "examples",
@@ -62,7 +45,11 @@ fn designs() -> Vec<PathBuf> {
         "viewer/public/templates",
         "viewer/e2e/fixtures",
     ] {
-        walk(&root.join(dir), &mut found);
+        found.extend(
+            cypcb_fixtures::tree::tracked_under(dir)
+                .into_iter()
+                .filter(|path| path.extension().is_some_and(|ext| ext == "cypcb")),
+        );
     }
     found.sort();
     found

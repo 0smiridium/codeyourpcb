@@ -12,6 +12,7 @@
 use std::path::{Path, PathBuf};
 
 use cypcb_export::{run_export, ExportJob};
+use cypcb_fixtures::tree::{tracked_in, written_entries};
 use cypcb_world::footprint::FootprintLibrary;
 use cypcb_world::{sync_ast_to_world, BoardWorld};
 
@@ -27,9 +28,8 @@ fn examples_dir() -> PathBuf {
 fn boards() -> Vec<(String, BoardWorld, FootprintLibrary)> {
     let mut out = Vec::new();
 
-    let mut files: Vec<PathBuf> = std::fs::read_dir(examples_dir())
-        .expect("the examples directory is there")
-        .filter_map(|entry| entry.ok().map(|e| e.path()))
+    let mut files: Vec<PathBuf> = tracked_in(examples_dir())
+        .into_iter()
         .filter(|path| path.extension().is_some_and(|ext| ext == "cypcb"))
         .collect();
     files.sort();
@@ -107,7 +107,7 @@ fn export_to_temp(
 /// subdirectory and assembly files in another.
 fn files_under(dir: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
-    let Ok(entries) = std::fs::read_dir(dir) else {
+    let Ok(entries) = written_entries(dir) else {
         return out;
     };
     for entry in entries.flatten() {
