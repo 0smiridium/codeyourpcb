@@ -417,7 +417,7 @@ impl Diagnostic for SyncError {
                 Some(Box::new("add this footprint to the library or use a built-in footprint like '0402', '0603', 'DIP-8'"))
             }
             SyncError::UnreadableFootprint { name, .. } => Some(Box::new(format!(
-                "'{name}' is read from that file, so it cannot be looked up until the file reads"
+                "'{name}' comes from that file, and the file gives no footprint for it"
             ))),
             SyncError::DuplicateRefDes { .. } => {
                 Some(Box::new("each component must have a unique reference designator"))
