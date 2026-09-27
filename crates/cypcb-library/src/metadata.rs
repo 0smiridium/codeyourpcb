@@ -148,72 +148,53 @@ pub fn latest_version(
     }
 }
 
-/// Associate a 3D STEP model path with a component
+/// Associate a 3D STEP model path with the component `source::written`
+///
+/// `written` is `library:name`, or a bare `name` one library alone holds, as
+/// [`crate::schema::get_component`] reads it. A bare name several libraries
+/// hold is [`LibraryError::Ambiguous`] and changes nothing: by name alone the
+/// path went to the component in every library that held the name.
 pub fn associate_step_model(
     conn: &Connection,
     source: &str,
-    component_name: &str,
+    written: &str,
     step_path: &str,
 ) -> Result<(), LibraryError> {
-    // First verify component exists
-    let count: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM components WHERE source = ?1 AND name = ?2",
-        params![source, component_name],
-        |row| row.get(0),
-    )?;
-
-    if count == 0 {
+    let Some(component) = crate::schema::get_component(conn, source, written)? else {
         return Err(LibraryError::NotFound(format!(
             "Component {}::{} not found",
-            source, component_name
+            source, written
         )));
-    }
+    };
 
-    // Update the step_model_path
     conn.execute(
-        "UPDATE components SET step_model_path = ?1 WHERE source = ?2 AND name = ?3",
-        params![step_path, source, component_name],
+        "UPDATE components SET step_model_path = ?1
+         WHERE source = ?2 AND library = ?3 AND name = ?4",
+        params![step_path, source, component.library, component.id.name],
     )?;
 
     Ok(())
 }
 
-/// Get the STEP model path for a component
+/// Get the STEP model path of the component `source::written`, named as
+/// [`associate_step_model`] names it
 pub fn get_step_model_path(
     conn: &Connection,
     source: &str,
-    component_name: &str,
+    written: &str,
 ) -> Result<Option<String>, LibraryError> {
-    let mut stmt =
-        conn.prepare("SELECT step_model_path FROM components WHERE source = ?1 AND name = ?2")?;
-
-    let mut rows = stmt.query(params![source, component_name])?;
-
-    if let Some(row) = rows.next()? {
-        Ok(row.get(0)?)
-    } else {
-        Ok(None)
-    }
+    Ok(crate::schema::get_component(conn, source, written)?
+        .and_then(|component| component.metadata.step_model_path))
 }
 
-/// Get component metadata (description, datasheet, manufacturer, etc.)
+/// Get the metadata (description, datasheet, manufacturer, etc.) of the
+/// component `source::written`, named as [`associate_step_model`] names it
 pub fn get_component_metadata(
     conn: &Connection,
     source: &str,
-    name: &str,
+    written: &str,
 ) -> Result<Option<ComponentMetadata>, LibraryError> {
-    let mut stmt = conn.prepare(
-        "SELECT description, datasheet_url, manufacturer, mpn, value, package, step_model_path
-             FROM components WHERE source = ?1 AND name = ?2",
-    )?;
-
-    let mut rows = stmt.query(params![source, name])?;
-
-    if let Some(row) = rows.next()? {
-        Ok(Some(crate::schema::metadata_from_row(row, 0)?))
-    } else {
-        Ok(None)
-    }
+    Ok(crate::schema::get_component(conn, source, written)?.map(|component| component.metadata))
 }
 
 #[cfg(test)]
@@ -369,5 +350,119 @@ mod tests {
         assert_eq!(metadata.description, Some("0805 Resistor".to_string()));
         assert_eq!(metadata.manufacturer, Some("Yageo".to_string()));
         assert_eq!(metadata.value, Some("10k".to_string()));
+    }
+
+    /// `A` and `B` each hold `R_0805`, made by `from A` and `from B`. `A`
+    /// alone holds `R_ONLY`.
+    fn two_libraries_with_one_name() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        initialize_schema(&conn).unwrap();
+        for (library, name) in [("A", "R_0805"), ("A", "R_ONLY"), ("B", "R_0805")] {
+            insert_library(
+                &conn,
+                &LibraryInfo {
+                    source: "kicad".to_string(),
+                    name: library.to_string(),
+                    path: None,
+                    version: None,
+                    enabled: true,
+                    component_count: 0,
+                },
+            )
+            .unwrap();
+            insert_component(
+                &conn,
+                &Component {
+                    id: ComponentId::new("kicad", name),
+                    library: library.to_string(),
+                    category: None,
+                    footprint_data: None,
+                    metadata: ComponentMetadata {
+                        manufacturer: Some(format!("from {library}")),
+                        ..Default::default()
+                    },
+                },
+            )
+            .unwrap();
+        }
+        conn
+    }
+
+    /// (library, name, STEP model path) of each row, in key order.
+    fn step_models(conn: &Connection) -> Vec<(String, String, Option<String>)> {
+        conn.prepare("SELECT library, name, step_model_path FROM components ORDER BY library, name")
+            .unwrap()
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap()
+    }
+
+    fn some(value: &str) -> Option<String> {
+        Some(value.to_string())
+    }
+
+    /// By source and name alone, a read got whichever library came first
+    /// and an edit changed the row in every library that held the name.
+    #[test]
+    fn every_lookup_finds_the_component_its_library_key_names() {
+        let conn = two_libraries_with_one_name();
+        let made_by = |written: &str| {
+            get_component_metadata(&conn, "kicad", written)
+                .unwrap()
+                .and_then(|metadata| metadata.manufacturer)
+        };
+        assert_eq!(made_by("A:R_0805"), some("from A"));
+        assert_eq!(made_by("B:R_0805"), some("from B"));
+        assert_eq!(made_by("R_ONLY"), some("from A"));
+        assert_eq!(made_by("B:R_ONLY"), None);
+
+        associate_step_model(&conn, "kicad", "B:R_0805", "b.step").unwrap();
+        associate_step_model(&conn, "kicad", "R_ONLY", "only.step").unwrap();
+        let step = |written: &str| get_step_model_path(&conn, "kicad", written).unwrap();
+        assert_eq!(step("A:R_0805"), None);
+        assert_eq!(step("B:R_0805"), some("b.step"));
+        assert_eq!(step("A:R_ONLY"), some("only.step"));
+        assert_eq!(
+            step_models(&conn),
+            [
+                ("A".to_string(), "R_0805".to_string(), None),
+                ("A".to_string(), "R_ONLY".to_string(), some("only.step")),
+                ("B".to_string(), "R_0805".to_string(), some("b.step")),
+            ]
+        );
+
+        match associate_step_model(&conn, "kicad", "B:R_ONLY", "none.step") {
+            Err(LibraryError::NotFound(message)) => assert!(message.contains("B:R_ONLY")),
+            other => panic!("expected NotFound, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_bare_name_two_libraries_hold_is_ambiguous_and_changes_nothing() {
+        let conn = two_libraries_with_one_name();
+        associate_step_model(&conn, "kicad", "B:R_0805", "b.step").unwrap();
+        let before = step_models(&conn);
+
+        fn candidates<T: std::fmt::Debug>(result: Result<T, LibraryError>) -> Vec<String> {
+            match result {
+                Err(LibraryError::Ambiguous { candidates, .. }) => candidates,
+                other => panic!("expected Ambiguous, got {other:?}"),
+            }
+        }
+        let both = ["kicad::A:R_0805", "kicad::B:R_0805"];
+        assert_eq!(
+            candidates(associate_step_model(&conn, "kicad", "R_0805", "bare.step")),
+            both
+        );
+        assert_eq!(
+            candidates(get_step_model_path(&conn, "kicad", "R_0805")),
+            both
+        );
+        assert_eq!(
+            candidates(get_component_metadata(&conn, "kicad", "R_0805")),
+            both
+        );
+        assert_eq!(step_models(&conn), before);
     }
 }

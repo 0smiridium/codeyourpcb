@@ -841,8 +841,8 @@ mod tests {
 
         // Direct UPDATE of category
         let result = conn.execute(
-            "UPDATE components SET category = ?1 WHERE source = ?2 AND name = ?3",
-            params!["Passive/Resistors", "test", "R_0805"],
+            "UPDATE components SET category = ?1 WHERE source = ?2 AND library = ?3 AND name = ?4",
+            params!["Passive/Resistors", "test", "TestLib", "R_0805"],
         );
 
         eprintln!("UPDATE result: {:?}", result);
