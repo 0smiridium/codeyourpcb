@@ -139,13 +139,101 @@ pub fn list_libraries(conn: &Connection) -> Result<Vec<LibraryInfo>, LibraryErro
     Ok(libraries)
 }
 
-/// Insert a single component into the database
-pub fn insert_component(conn: &Connection, component: &Component) -> Result<(), LibraryError> {
+/// Why a component was not written to the index.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Rejection {
+    /// Another library already holds a component by this name. The index
+    /// keys a component by source and name, so writing it would take the
+    /// entry away from that library; it is refused instead.
+    HeldByAnotherLibrary {
+        source: String,
+        name: String,
+        library: String,
+        held_by: String,
+    },
+    /// One library holds two components by this name. The first one written
+    /// stays.
+    TwiceInOneLibrary {
+        source: String,
+        name: String,
+        library: String,
+    },
+}
+
+/// A KiCad library is the `.pretty` folder a person sees on disk.
+fn shown(source: &str, library: &str) -> String {
+    if source == "kicad" {
+        format!("{library}.pretty")
+    } else {
+        format!("library '{library}'")
+    }
+}
+
+impl std::fmt::Display for Rejection {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Rejection::HeldByAnotherLibrary {
+                source,
+                name,
+                library,
+                held_by,
+            } => write!(
+                f,
+                "'{name}' from {} is not indexed: the name is already indexed from {}",
+                shown(source, library),
+                shown(source, held_by)
+            ),
+            Rejection::TwiceInOneLibrary {
+                source,
+                name,
+                library,
+            } => write!(
+                f,
+                "'{name}' from {} is not indexed: {} holds another footprint by that name, \
+                 and that one is indexed",
+                shown(source, library),
+                shown(source, library)
+            ),
+        }
+    }
+}
+
+/// What writing one component did to the index.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Written {
+    /// A new row.
+    Inserted,
+    /// The row this library already held under that name, rewritten.
+    Updated,
+    /// Nothing was written.
+    Rejected(Rejection),
+}
+
+/// What a batch did: the rows it wrote, and the components it refused.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct BatchOutcome {
+    /// Components inserted or rewritten. Each one is a row in the index.
+    pub written: usize,
+    /// Components not written, with the reason.
+    pub rejected: Vec<Rejection>,
+}
+
+/// Write one component. `written_before` says that the same batch already
+/// wrote a component by this name, so a second one is a duplicate and not a
+/// re-import.
+///
+/// Only a UNIQUE conflict on (source, name) leads to an UPDATE. A missing
+/// library row is a FOREIGN KEY failure, and an UPDATE was run on it once:
+/// it changed no row, and the component was lost with `Ok`.
+fn write_component(
+    conn: &Connection,
+    component: &Component,
+    written_before: bool,
+) -> Result<Written, LibraryError> {
     let metadata_json = serde_json::to_string(&component.metadata)
         .map_err(|e| LibraryError::Parse(format!("Failed to serialize metadata: {}", e)))?;
 
-    // Try INSERT first
-    let insert_result = conn.execute(
+    let inserted = conn.execute(
         "INSERT INTO components
          (source, name, library, category, footprint_data, description, datasheet_url,
           manufacturer, mpn, value, package, step_model_path, metadata_json)
@@ -167,127 +255,118 @@ pub fn insert_component(conn: &Connection, component: &Component) -> Result<(), 
         ],
     );
 
-    // If INSERT failed due to UNIQUE constraint, do UPDATE instead
-    match insert_result {
-        Ok(_) => Ok(()),
+    match inserted {
+        Ok(_) => return Ok(Written::Inserted),
         Err(rusqlite::Error::SqliteFailure(err, _))
-            if err.code == rusqlite::ErrorCode::ConstraintViolation =>
+            if err.extended_code == rusqlite::ffi::SQLITE_CONSTRAINT_UNIQUE => {}
+        Err(rusqlite::Error::SqliteFailure(err, _))
+            if err.extended_code == rusqlite::ffi::SQLITE_CONSTRAINT_FOREIGNKEY =>
         {
-            // Component exists, update it
-            conn.execute(
-                "UPDATE components SET
-                    library = ?1,
-                    category = ?2,
-                    footprint_data = ?3,
-                    description = ?4,
-                    datasheet_url = ?5,
-                    manufacturer = ?6,
-                    mpn = ?7,
-                    value = ?8,
-                    package = ?9,
-                    step_model_path = ?10,
-                    metadata_json = ?11
-                 WHERE source = ?12 AND name = ?13",
-                params![
-                    &component.library,
-                    &component.category,
-                    &component.footprint_data,
-                    &component.metadata.description,
-                    &component.metadata.datasheet_url,
-                    &component.metadata.manufacturer,
-                    &component.metadata.mpn,
-                    &component.metadata.value,
-                    &component.metadata.package,
-                    &component.metadata.step_model_path,
-                    &metadata_json,
-                    &component.id.source,
-                    &component.id.name,
-                ],
-            )?;
-            Ok(())
+            return Err(LibraryError::NotIndexed(format!(
+                "'{}' from {} is not indexed: the index holds no {} in source '{}'",
+                component.id.name,
+                shown(&component.id.source, &component.library),
+                shown(&component.id.source, &component.library),
+                component.id.source
+            )));
         }
-        Err(e) => Err(e.into()),
+        Err(e) => return Err(e.into()),
+    }
+
+    let held_by: String = conn.query_row(
+        "SELECT library FROM components WHERE source = ?1 AND name = ?2",
+        params![&component.id.source, &component.id.name],
+        |row| row.get(0),
+    )?;
+    if held_by != component.library {
+        return Ok(Written::Rejected(Rejection::HeldByAnotherLibrary {
+            source: component.id.source.clone(),
+            name: component.id.name.clone(),
+            library: component.library.clone(),
+            held_by,
+        }));
+    }
+    if written_before {
+        return Ok(Written::Rejected(Rejection::TwiceInOneLibrary {
+            source: component.id.source.clone(),
+            name: component.id.name.clone(),
+            library: component.library.clone(),
+        }));
+    }
+
+    // The same library imported again: its row is rewritten.
+    let changed = conn.execute(
+        "UPDATE components SET
+            category = ?1,
+            footprint_data = ?2,
+            description = ?3,
+            datasheet_url = ?4,
+            manufacturer = ?5,
+            mpn = ?6,
+            value = ?7,
+            package = ?8,
+            step_model_path = ?9,
+            metadata_json = ?10
+         WHERE source = ?11 AND name = ?12 AND library = ?13",
+        params![
+            &component.category,
+            &component.footprint_data,
+            &component.metadata.description,
+            &component.metadata.datasheet_url,
+            &component.metadata.manufacturer,
+            &component.metadata.mpn,
+            &component.metadata.value,
+            &component.metadata.package,
+            &component.metadata.step_model_path,
+            &metadata_json,
+            &component.id.source,
+            &component.id.name,
+            &component.library,
+        ],
+    )?;
+    if changed != 1 {
+        return Err(LibraryError::NotIndexed(format!(
+            "'{}' from {} is not indexed: rewriting its row changed {changed} rows, not 1",
+            component.id.name,
+            shown(&component.id.source, &component.library)
+        )));
+    }
+    Ok(Written::Updated)
+}
+
+/// Insert a single component into the database
+///
+/// A component another library already holds under this name is an error,
+/// not an overwrite.
+pub fn insert_component(conn: &Connection, component: &Component) -> Result<(), LibraryError> {
+    match write_component(conn, component, false)? {
+        Written::Inserted | Written::Updated => Ok(()),
+        Written::Rejected(why) => Err(LibraryError::NotIndexed(why.to_string())),
     }
 }
 
 /// Insert multiple components in a single transaction
+///
+/// `written` counts the rows this batch put in the index; a refused
+/// component is in `rejected`, not in the count.
 pub fn insert_components_batch(
     conn: &mut Connection,
     components: &[Component],
-) -> Result<usize, LibraryError> {
+) -> Result<BatchOutcome, LibraryError> {
     let tx = conn.transaction()?;
+    let mut outcome = BatchOutcome::default();
+    let mut names = std::collections::HashSet::new();
 
     for component in components {
-        let metadata_json = serde_json::to_string(&component.metadata)
-            .map_err(|e| LibraryError::Parse(format!("Failed to serialize metadata: {}", e)))?;
-
-        // Try INSERT first
-        let insert_result = tx.execute(
-            "INSERT INTO components
-             (source, name, library, category, footprint_data, description, datasheet_url,
-              manufacturer, mpn, value, package, step_model_path, metadata_json)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
-            params![
-                &component.id.source,
-                &component.id.name,
-                &component.library,
-                &component.category,
-                &component.footprint_data,
-                &component.metadata.description,
-                &component.metadata.datasheet_url,
-                &component.metadata.manufacturer,
-                &component.metadata.mpn,
-                &component.metadata.value,
-                &component.metadata.package,
-                &component.metadata.step_model_path,
-                &metadata_json,
-            ],
-        );
-
-        // If INSERT failed due to UNIQUE constraint, do UPDATE instead
-        match insert_result {
-            Ok(_) => {}
-            Err(rusqlite::Error::SqliteFailure(err, _))
-                if err.code == rusqlite::ErrorCode::ConstraintViolation =>
-            {
-                // Component exists, update it
-                tx.execute(
-                    "UPDATE components SET
-                        library = ?1,
-                        category = ?2,
-                        footprint_data = ?3,
-                        description = ?4,
-                        datasheet_url = ?5,
-                        manufacturer = ?6,
-                        mpn = ?7,
-                        value = ?8,
-                        package = ?9,
-                        step_model_path = ?10,
-                        metadata_json = ?11
-                     WHERE source = ?12 AND name = ?13",
-                    params![
-                        &component.library,
-                        &component.category,
-                        &component.footprint_data,
-                        &component.metadata.description,
-                        &component.metadata.datasheet_url,
-                        &component.metadata.manufacturer,
-                        &component.metadata.mpn,
-                        &component.metadata.value,
-                        &component.metadata.package,
-                        &component.metadata.step_model_path,
-                        &metadata_json,
-                        &component.id.source,
-                        &component.id.name,
-                    ],
-                )?;
-            }
-            Err(e) => return Err(e.into()),
+        let written_before = !names.insert((&component.id.source, &component.id.name));
+        match write_component(&tx, component, written_before)? {
+            Written::Inserted | Written::Updated => outcome.written += 1,
+            Written::Rejected(why) => outcome.rejected.push(why),
         }
     }
 
     tx.commit()?;
-    Ok(components.len())
+    Ok(outcome)
 }
 
 /// Every component that carries a footprint, ordered by source and name.
@@ -467,7 +546,9 @@ mod tests {
         ];
 
         // Batch insert
-        let count = insert_components_batch(&mut conn, &components).unwrap();
+        let count = insert_components_batch(&mut conn, &components)
+            .unwrap()
+            .written;
         assert_eq!(count, 2);
 
         // Verify both components exist
@@ -600,5 +681,104 @@ mod tests {
             retrieved.unwrap().category,
             Some("Passive/Resistors".to_string())
         );
+    }
+
+    fn library(name: &str) -> LibraryInfo {
+        LibraryInfo {
+            source: "kicad".to_string(),
+            name: name.to_string(),
+            path: None,
+            version: None,
+            enabled: true,
+            component_count: 0,
+        }
+    }
+
+    fn footprint(name: &str, library: &str) -> Component {
+        Component {
+            id: ComponentId::new("kicad", name),
+            library: library.to_string(),
+            category: None,
+            footprint_data: Some("(footprint x)".to_string()),
+            metadata: ComponentMetadata::default(),
+        }
+    }
+
+    #[test]
+    fn a_component_of_a_library_the_index_lacks_is_an_error() {
+        let conn = Connection::open_in_memory().unwrap();
+        initialize_schema(&conn).unwrap();
+        // The component is written once, so a second write meets the
+        // UNIQUE conflict and not only the missing library.
+        insert_library(&conn, &library("A")).unwrap();
+        insert_component(&conn, &footprint("SOT-23-5", "A")).unwrap();
+
+        let err = insert_component(&conn, &footprint("R_0603", "Missing"))
+            .expect_err("no library row, so no component row");
+        assert_eq!(
+            err.to_string(),
+            "'R_0603' from Missing.pretty is not indexed: the index holds no Missing.pretty in source 'kicad'"
+        );
+        assert!(get_component(&conn, "kicad", "R_0603").unwrap().is_none());
+    }
+
+    #[test]
+    fn a_name_another_library_holds_is_not_taken_from_it() {
+        let conn = Connection::open_in_memory().unwrap();
+        initialize_schema(&conn).unwrap();
+        insert_library(&conn, &library("A")).unwrap();
+        insert_library(&conn, &library("B")).unwrap();
+        insert_component(&conn, &footprint("SOT-23-5", "A")).unwrap();
+
+        let err = insert_component(&conn, &footprint("SOT-23-5", "B"))
+            .expect_err("B does not get A's footprint");
+        assert_eq!(
+            err.to_string(),
+            "'SOT-23-5' from B.pretty is not indexed: the name is already indexed from A.pretty"
+        );
+        let kept = get_component(&conn, "kicad", "SOT-23-5").unwrap().unwrap();
+        assert_eq!(kept.library, "A");
+    }
+
+    #[test]
+    fn a_batch_counts_the_rows_it_wrote() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        initialize_schema(&conn).unwrap();
+        insert_library(&conn, &library("A")).unwrap();
+        insert_library(&conn, &library("B")).unwrap();
+
+        let first = insert_components_batch(
+            &mut conn,
+            &[
+                footprint("SOT-23-5", "A"),
+                footprint("SOT-23-5", "A"),
+                footprint("R_0603", "A"),
+            ],
+        )
+        .unwrap();
+        let second = insert_components_batch(
+            &mut conn,
+            &[footprint("SOT-23-5", "B"), footprint("C_0603", "B")],
+        )
+        .unwrap();
+        let again = insert_components_batch(&mut conn, &[footprint("R_0603", "A")]).unwrap();
+
+        let rows: usize = conn
+            .query_row("SELECT count(*) FROM components", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!((first.written, second.written, again.written), (2, 1, 1));
+        assert_eq!(rows, first.written + second.written);
+        assert_eq!(
+            first.rejected.len() + second.rejected.len() + again.rejected.len(),
+            2
+        );
+        assert!(matches!(
+            first.rejected[0],
+            Rejection::TwiceInOneLibrary { .. }
+        ));
+        assert!(matches!(
+            second.rejected[0],
+            Rejection::HeldByAnotherLibrary { .. }
+        ));
     }
 }

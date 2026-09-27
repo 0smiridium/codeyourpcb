@@ -86,7 +86,7 @@ impl LibraryCommand {
                 manager.add_kicad_search_path(directory.clone());
 
                 let imported = manager
-                    .auto_import_folder(&directory)
+                    .import_folder(&directory)
                     .into_diagnostic()
                     .wrap_err("importing the libraries in that directory")?;
 
@@ -99,16 +99,18 @@ impl LibraryCommand {
                     return Ok(());
                 }
 
-                let libraries = manager.list_libraries().into_diagnostic()?;
+                // The count is what was written, so it equals the rows the
+                // import added or rewrote. A refused footprint is named, and
+                // counted apart.
                 let mut total = 0usize;
-                for name in &imported {
-                    let count = libraries
-                        .iter()
-                        .find(|library| &library.name == name)
-                        .map(|library| library.component_count)
-                        .unwrap_or(0);
-                    total += count;
-                    println!("{name}: {count} footprint(s)");
+                let mut refused = 0usize;
+                for (name, outcome) in &imported {
+                    for why in &outcome.rejected {
+                        eprintln!("{why}");
+                    }
+                    total += outcome.written;
+                    refused += outcome.rejected.len();
+                    println!("{name}: {} footprint(s)", outcome.written);
                 }
                 println!(
                     "Indexed {total} footprint(s) from {} librar{} into {}",
@@ -116,6 +118,9 @@ impl LibraryCommand {
                     if imported.len() == 1 { "y" } else { "ies" },
                     path.display()
                 );
+                if refused > 0 {
+                    println!("{refused} footprint(s) not indexed: the reason for each is above");
+                }
             }
 
             LibraryAction::Search(args) => {

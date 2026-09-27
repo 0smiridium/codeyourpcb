@@ -99,13 +99,13 @@ impl LibraryManager {
     /// Parses all .kicad_mod files in the library and indexes them for search.
     ///
     /// # Returns
-    /// Number of components imported
-    pub fn import_kicad_library(&self, name: &str) -> Result<usize, LibraryError> {
+    /// The components written, and the ones refused with the reason
+    pub fn import_kicad_library(&self, name: &str) -> Result<schema::BatchOutcome, LibraryError> {
         // Get components from KiCad source
         let components = self.kicad_source.import_library(name)?;
 
         if components.is_empty() {
-            return Ok(0);
+            return Ok(schema::BatchOutcome::default());
         }
 
         // Create library record
@@ -115,16 +115,24 @@ impl LibraryManager {
             path: None,
             version: None,
             enabled: true,
-            component_count: components.len(),
+            component_count: 0,
         };
 
         let mut conn = self.conn.lock().unwrap();
         schema::insert_library(&conn, &library)?;
 
         // Batch insert components
-        let count = schema::insert_components_batch(&mut conn, &components)?;
+        let outcome = schema::insert_components_batch(&mut conn, &components)?;
 
-        Ok(count)
+        // The count is the rows the library holds, not the files it was read from.
+        conn.execute(
+            "UPDATE libraries SET component_count =
+                (SELECT count(*) FROM components WHERE source = ?1 AND library = ?2)
+             WHERE source = ?1 AND name = ?2",
+            rusqlite::params!["kicad", name],
+        )?;
+
+        Ok(outcome)
     }
 
     /// Auto-import all libraries from a folder
@@ -134,14 +142,31 @@ impl LibraryManager {
     /// # Returns
     /// List of imported library names
     pub fn auto_import_folder(&self, path: &Path) -> Result<Vec<String>, LibraryError> {
-        let libraries = KiCadSource::auto_organize_folder(path)?;
+        Ok(self
+            .import_folder(path)?
+            .into_iter()
+            .map(|(name, _)| name)
+            .collect())
+    }
+
+    /// Import every `.pretty` library under a folder, in name order, and say
+    /// for each one what was written and what was refused.
+    ///
+    /// When two libraries hold a footprint by the same name, the one first
+    /// in name order keeps it.
+    pub fn import_folder(
+        &self,
+        path: &Path,
+    ) -> Result<Vec<(String, schema::BatchOutcome)>, LibraryError> {
+        let mut libraries = KiCadSource::auto_organize_folder(path)?;
+        libraries.sort_by(|a, b| a.name.cmp(&b.name));
         let mut imported = Vec::new();
 
         for lib in libraries {
             // Import each discovered library
             match self.import_kicad_library(&lib.name) {
-                Ok(_) => {
-                    imported.push(lib.name);
+                Ok(outcome) => {
+                    imported.push((lib.name, outcome));
                 }
                 Err(e) => {
                     eprintln!("Warning: Failed to import library '{}': {}", lib.name, e);
