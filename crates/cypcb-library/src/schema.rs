@@ -1,5 +1,5 @@
 use crate::error::LibraryError;
-use crate::models::{Component, ComponentId, ComponentMetadata, LibraryInfo};
+use crate::models::{Component, ComponentMetadata, LibraryInfo};
 use rusqlite::{params, Connection};
 
 /// SQLite schema for library management with FTS5 full-text search
@@ -31,7 +31,7 @@ CREATE TABLE IF NOT EXISTS components (
     package TEXT,
     step_model_path TEXT,
     metadata_json TEXT,
-    UNIQUE(source, name),
+    UNIQUE(source, library, name),
     FOREIGN KEY (source, library) REFERENCES libraries(source, name)
 );
 
@@ -52,20 +52,22 @@ CREATE VIRTUAL TABLE IF NOT EXISTS components_fts USING fts5(
     package
 );
 
--- Triggers to keep FTS5 in sync with components table
+-- Triggers to keep FTS5 in sync with components table. A search joins the
+-- two on rowid, and two libraries can hold one name, so a row is found by
+-- its rowid and not by its name.
 CREATE TRIGGER IF NOT EXISTS components_ai AFTER INSERT ON components BEGIN
-    INSERT INTO components_fts(source, name, category, description, manufacturer, mpn, value, package)
-    VALUES (new.source, new.name, new.category, new.description, new.manufacturer, new.mpn, new.value, new.package);
+    INSERT INTO components_fts(rowid, source, name, category, description, manufacturer, mpn, value, package)
+    VALUES (new.rowid, new.source, new.name, new.category, new.description, new.manufacturer, new.mpn, new.value, new.package);
 END;
 
 CREATE TRIGGER IF NOT EXISTS components_ad AFTER DELETE ON components BEGIN
-    DELETE FROM components_fts WHERE source = old.source AND name = old.name;
+    DELETE FROM components_fts WHERE rowid = old.rowid;
 END;
 
 CREATE TRIGGER IF NOT EXISTS components_au AFTER UPDATE ON components BEGIN
-    DELETE FROM components_fts WHERE source = old.source AND name = old.name;
-    INSERT INTO components_fts(source, name, category, description, manufacturer, mpn, value, package)
-    VALUES (new.source, new.name, new.category, new.description, new.manufacturer, new.mpn, new.value, new.package);
+    DELETE FROM components_fts WHERE rowid = old.rowid;
+    INSERT INTO components_fts(rowid, source, name, category, description, manufacturer, mpn, value, package)
+    VALUES (new.rowid, new.source, new.name, new.category, new.description, new.manufacturer, new.mpn, new.value, new.package);
 END;
 "#;
 
@@ -85,10 +87,78 @@ CREATE TABLE IF NOT EXISTS library_versions (
 CREATE INDEX IF NOT EXISTS idx_library_versions_lookup ON library_versions(source, library_name, imported_at);
 "#;
 
+/// The schema this crate writes, kept in `PRAGMA user_version`.
+///
+/// 0 is a file written before the version was kept: it keys a component by
+/// source and name, so two libraries could not hold one name. 1 keys it by
+/// source, library and name, the way KiCad's `LIB_ID` does.
+pub const SCHEMA_VERSION: i64 = 1;
+
 /// Initialize the library database schema
+///
+/// A file in an older schema is moved to this one first, with every row kept.
 pub fn initialize_schema(conn: &Connection) -> Result<(), LibraryError> {
+    let version: i64 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+    let has_components: bool = conn.query_row(
+        "SELECT count(*) > 0 FROM sqlite_master WHERE type = 'table' AND name = 'components'",
+        [],
+        |row| row.get(0),
+    )?;
+    if has_components && version < SCHEMA_VERSION {
+        key_components_by_library(conn)?;
+    }
     conn.execute_batch(LIBRARY_SCHEMA)?;
+    // Written only when it changes: every write moves the change counter in
+    // the file header, and the editor reads that counter to tell whether the
+    // index changed since it last read it.
+    if version != SCHEMA_VERSION {
+        conn.execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION}"))?;
+    }
     initialize_metadata_schema(conn)?;
+    Ok(())
+}
+
+/// Move a file keyed by (source, name) to the key (source, library, name).
+///
+/// SQLite cannot change a table's UNIQUE constraint, so the table is built
+/// again under the new schema and the rows are copied with their rowids. The
+/// old key is the new one without the library, so no row can conflict. The
+/// search index is built again from the copied rows. It all happens in one
+/// transaction: a copy that does not keep every row changes nothing.
+fn key_components_by_library(conn: &Connection) -> Result<(), LibraryError> {
+    let tx = conn.unchecked_transaction()?;
+    tx.execute_batch(
+        "DROP TRIGGER IF EXISTS components_ai;
+         DROP TRIGGER IF EXISTS components_ad;
+         DROP TRIGGER IF EXISTS components_au;
+         DROP INDEX IF EXISTS idx_components_category;
+         DROP INDEX IF EXISTS idx_components_manufacturer;
+         DROP INDEX IF EXISTS idx_components_value;
+         DROP TABLE IF EXISTS components_fts;
+         ALTER TABLE components RENAME TO components_keyed_by_name;",
+    )?;
+    tx.execute_batch(LIBRARY_SCHEMA)?;
+    let before: usize =
+        tx.query_row("SELECT count(*) FROM components_keyed_by_name", [], |row| {
+            row.get(0)
+        })?;
+    let copied = tx.execute(
+        "INSERT INTO components
+         (rowid, source, name, library, category, footprint_data, description, datasheet_url,
+          manufacturer, mpn, value, package, step_model_path, metadata_json)
+         SELECT rowid, source, name, library, category, footprint_data, description, datasheet_url,
+                manufacturer, mpn, value, package, step_model_path, metadata_json
+         FROM components_keyed_by_name",
+        [],
+    )?;
+    if copied != before {
+        return Err(LibraryError::NotIndexed(format!(
+            "moving the index to the library key copied {copied} of {before} rows; \
+             the file is left as it was"
+        )));
+    }
+    tx.execute_batch("DROP TABLE components_keyed_by_name;")?;
+    tx.commit()?;
     Ok(())
 }
 
@@ -99,7 +169,19 @@ pub fn initialize_metadata_schema(conn: &Connection) -> Result<(), LibraryError>
 }
 
 /// Insert a library into the database
+///
+/// A design names a footprint `source::library:name` and splits it at the
+/// first `:`, so a library name that holds one is refused. KiCad refuses it
+/// in a library nickname too.
 pub fn insert_library(conn: &Connection, lib: &LibraryInfo) -> Result<(), LibraryError> {
+    if lib.name.contains(':') {
+        return Err(LibraryError::NotIndexed(format!(
+            "{} is not indexed: a design names a footprint `{}::<library>:<name>`, \
+             so a library name cannot hold ':'",
+            shown(&lib.source, &lib.name),
+            lib.source
+        )));
+    }
     conn.execute(
         "INSERT OR REPLACE INTO libraries (source, name, path, version, enabled, component_count)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
@@ -142,15 +224,6 @@ pub fn list_libraries(conn: &Connection) -> Result<Vec<LibraryInfo>, LibraryErro
 /// Why a component was not written to the index.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Rejection {
-    /// Another library already holds a component by this name. The index
-    /// keys a component by source and name, so writing it would take the
-    /// entry away from that library; it is refused instead.
-    HeldByAnotherLibrary {
-        source: String,
-        name: String,
-        library: String,
-        held_by: String,
-    },
     /// One library holds two components by this name. The first one written
     /// stays.
     TwiceInOneLibrary {
@@ -172,17 +245,6 @@ fn shown(source: &str, library: &str) -> String {
 impl std::fmt::Display for Rejection {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Rejection::HeldByAnotherLibrary {
-                source,
-                name,
-                library,
-                held_by,
-            } => write!(
-                f,
-                "'{name}' from {} is not indexed: the name is already indexed from {}",
-                shown(source, library),
-                shown(source, held_by)
-            ),
             Rejection::TwiceInOneLibrary {
                 source,
                 name,
@@ -209,20 +271,23 @@ pub enum Written {
     Rejected(Rejection),
 }
 
-/// What a batch did: the rows it wrote, and the components it refused.
+/// What a batch did: the rows it wrote, the components it refused, and the
+/// rows it took out.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct BatchOutcome {
     /// Components inserted or rewritten. Each one is a row in the index.
     pub written: usize,
     /// Components not written, with the reason.
     pub rejected: Vec<Rejection>,
+    /// Rows of the library that the import no longer holds, removed.
+    pub removed: usize,
 }
 
 /// Write one component. `written_before` says that the same batch already
 /// wrote a component by this name, so a second one is a duplicate and not a
 /// re-import.
 ///
-/// Only a UNIQUE conflict on (source, name) leads to an UPDATE. A missing
+/// Only a UNIQUE conflict on (source, library, name) leads to an UPDATE. A missing
 /// library row is a FOREIGN KEY failure, and an UPDATE was run on it once:
 /// it changed no row, and the component was lost with `Ok`.
 fn write_component(
@@ -273,19 +338,6 @@ fn write_component(
         Err(e) => return Err(e.into()),
     }
 
-    let held_by: String = conn.query_row(
-        "SELECT library FROM components WHERE source = ?1 AND name = ?2",
-        params![&component.id.source, &component.id.name],
-        |row| row.get(0),
-    )?;
-    if held_by != component.library {
-        return Ok(Written::Rejected(Rejection::HeldByAnotherLibrary {
-            source: component.id.source.clone(),
-            name: component.id.name.clone(),
-            library: component.library.clone(),
-            held_by,
-        }));
-    }
     if written_before {
         return Ok(Written::Rejected(Rejection::TwiceInOneLibrary {
             source: component.id.source.clone(),
@@ -336,8 +388,7 @@ fn write_component(
 
 /// Insert a single component into the database
 ///
-/// A component another library already holds under this name is an error,
-/// not an overwrite.
+/// A component its library already holds under this name is rewritten.
 pub fn insert_component(conn: &Connection, component: &Component) -> Result<(), LibraryError> {
     match write_component(conn, component, false)? {
         Written::Inserted | Written::Updated => Ok(()),
@@ -354,58 +405,130 @@ pub fn insert_components_batch(
     components: &[Component],
 ) -> Result<BatchOutcome, LibraryError> {
     let tx = conn.transaction()?;
-    let mut outcome = BatchOutcome::default();
-    let mut names = std::collections::HashSet::new();
-
-    for component in components {
-        let written_before = !names.insert((&component.id.source, &component.id.name));
-        match write_component(&tx, component, written_before)? {
-            Written::Inserted | Written::Updated => outcome.written += 1,
-            Written::Rejected(why) => outcome.rejected.push(why),
-        }
-    }
-
+    let outcome = write_all(&tx, components)?;
     tx.commit()?;
     Ok(outcome)
 }
 
-/// Every component that carries a footprint, ordered by source and name.
-pub fn footprint_ids(conn: &Connection) -> Result<Vec<ComponentId>, LibraryError> {
+fn write_all(conn: &Connection, components: &[Component]) -> Result<BatchOutcome, LibraryError> {
+    let mut outcome = BatchOutcome::default();
+    let mut names = std::collections::HashSet::new();
+
+    for component in components {
+        let written_before =
+            !names.insert((&component.id.source, &component.library, &component.id.name));
+        match write_component(conn, component, written_before)? {
+            Written::Inserted | Written::Updated => outcome.written += 1,
+            Written::Rejected(why) => outcome.rejected.push(why),
+        }
+    }
+    Ok(outcome)
+}
+
+/// Make `library` of `source` hold `components` and nothing else, in one
+/// transaction.
+///
+/// A re-import wrote the files it found and left the rows of files deleted
+/// since, so the index held more than the folder and more than the import
+/// reported. Those rows are removed now and counted in `removed`.
+pub fn replace_library_components(
+    conn: &mut Connection,
+    source: &str,
+    library: &str,
+    components: &[Component],
+) -> Result<BatchOutcome, LibraryError> {
+    let tx = conn.transaction()?;
+    let mut outcome = write_all(&tx, components)?;
+    let kept: std::collections::HashSet<&str> = components
+        .iter()
+        .filter(|component| component.id.source == source && component.library == library)
+        .map(|component| component.id.name.as_str())
+        .collect();
+    let held: Vec<(i64, String)> = tx
+        .prepare("SELECT rowid, name FROM components WHERE source = ?1 AND library = ?2")?
+        .query_map(params![source, library], |row| {
+            Ok((row.get(0)?, row.get(1)?))
+        })?
+        .collect::<Result<_, _>>()?;
+    for (rowid, name) in held {
+        if !kept.contains(name.as_str()) {
+            outcome.removed += tx.execute("DELETE FROM components WHERE rowid = ?1", [rowid])?;
+        }
+    }
+    tx.commit()?;
+    Ok(outcome)
+}
+
+/// Every component that carries a footprint, written in full the way a
+/// design writes it: `source::library:name`, ordered that way.
+pub fn footprint_names(conn: &Connection) -> Result<Vec<String>, LibraryError> {
     let mut stmt = conn.prepare(
-        "SELECT source, name FROM components WHERE footprint_data IS NOT NULL ORDER BY source, name",
+        "SELECT source, library, name FROM components WHERE footprint_data IS NOT NULL
+         ORDER BY source, library, name",
     )?;
-    let ids = stmt
+    let names = stmt
         .query_map([], |row| {
-            Ok(ComponentId::new(
+            Ok(format!(
+                "{}::{}:{}",
                 row.get::<_, String>(0)?,
                 row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?
             ))
         })?
         .collect::<Result<Vec<_>, _>>()?;
-    Ok(ids)
+    Ok(names)
 }
 
-/// Get a component by source and name
+/// The component a design means by `source::written`.
+///
+/// `written` is `library:name`, split at the first `:`, or a bare `name`.
+/// A bare name finds the component when one library holds it. When several
+/// do, it is [`LibraryError::Ambiguous`] with each one written in full: the
+/// index does not pick a library for the design.
 pub fn get_component(
     conn: &Connection,
     source: &str,
-    name: &str,
+    written: &str,
 ) -> Result<Option<Component>, LibraryError> {
-    let mut stmt = conn.prepare(
+    const COLUMNS: &str =
         "SELECT source, name, library, category, footprint_data, description, datasheet_url,
                 manufacturer, mpn, value, package, step_model_path, metadata_json
-         FROM components
-         WHERE source = ?1 AND name = ?2",
-    )?;
+         FROM components";
+    let mut found = match written.split_once(':') {
+        Some((library, name)) => components_where(
+            conn,
+            &format!("{COLUMNS} WHERE source = ?1 AND library = ?2 AND name = ?3"),
+            params![source, library, name],
+        )?,
+        None => components_where(
+            conn,
+            &format!("{COLUMNS} WHERE source = ?1 AND name = ?2 ORDER BY library"),
+            params![source, written],
+        )?,
+    };
+    if found.len() > 1 {
+        return Err(LibraryError::Ambiguous {
+            written: format!("{source}::{written}"),
+            candidates: found.iter().map(Component::full_name).collect(),
+        });
+    }
+    Ok(found.pop())
+}
 
-    let mut rows = stmt.query(params![source, name])?;
-
-    if let Some(row) = rows.next()? {
+fn components_where(
+    conn: &Connection,
+    sql: &str,
+    params: impl rusqlite::Params,
+) -> Result<Vec<Component>, LibraryError> {
+    let mut stmt = conn.prepare(sql)?;
+    let mut rows = stmt.query(params)?;
+    let mut found = Vec::new();
+    while let Some(row) = rows.next()? {
         let metadata_json: String = row.get(12)?;
         let metadata: ComponentMetadata = serde_json::from_str(&metadata_json)
             .map_err(|e| LibraryError::Parse(format!("Failed to parse metadata: {}", e)))?;
 
-        Ok(Some(Component {
+        found.push(Component {
             id: crate::models::ComponentId {
                 source: row.get(0)?,
                 name: row.get(1)?,
@@ -414,10 +537,9 @@ pub fn get_component(
             category: row.get(3)?,
             footprint_data: row.get(4)?,
             metadata,
-        }))
-    } else {
-        Ok(None)
+        });
     }
+    Ok(found)
 }
 
 /// Delete all components for a library
@@ -723,21 +845,203 @@ mod tests {
     }
 
     #[test]
-    fn a_name_another_library_holds_is_not_taken_from_it() {
+    fn two_libraries_hold_one_name() {
         let conn = Connection::open_in_memory().unwrap();
         initialize_schema(&conn).unwrap();
         insert_library(&conn, &library("A")).unwrap();
         insert_library(&conn, &library("B")).unwrap();
         insert_component(&conn, &footprint("SOT-23-5", "A")).unwrap();
+        insert_component(&conn, &footprint("SOT-23-5", "B")).unwrap();
 
-        let err = insert_component(&conn, &footprint("SOT-23-5", "B"))
-            .expect_err("B does not get A's footprint");
+        let a = get_component(&conn, "kicad", "A:SOT-23-5")
+            .unwrap()
+            .unwrap();
+        let b = get_component(&conn, "kicad", "B:SOT-23-5")
+            .unwrap()
+            .unwrap();
+        assert_eq!((a.library.as_str(), b.library.as_str()), ("A", "B"));
+        assert_eq!(a.full_name(), "kicad::A:SOT-23-5");
+        assert!(get_component(&conn, "kicad", "C:SOT-23-5")
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn a_bare_name_two_libraries_hold_names_both_and_picks_neither() {
+        let conn = Connection::open_in_memory().unwrap();
+        initialize_schema(&conn).unwrap();
+        insert_library(&conn, &library("B")).unwrap();
+        insert_library(&conn, &library("A")).unwrap();
+        insert_component(&conn, &footprint("SOT-23-5", "B")).unwrap();
+        insert_component(&conn, &footprint("R_0603", "B")).unwrap();
+
+        let alone = get_component(&conn, "kicad", "SOT-23-5").unwrap().unwrap();
+        assert_eq!(alone.library, "B");
+
+        insert_component(&conn, &footprint("SOT-23-5", "A")).unwrap();
+        let err = get_component(&conn, "kicad", "SOT-23-5").expect_err("two libraries hold it");
         assert_eq!(
             err.to_string(),
-            "'SOT-23-5' from B.pretty is not indexed: the name is already indexed from A.pretty"
+            "'kicad::SOT-23-5' is in more than one library: \
+             kicad::A:SOT-23-5, kicad::B:SOT-23-5; write the one you mean"
         );
-        let kept = get_component(&conn, "kicad", "SOT-23-5").unwrap().unwrap();
-        assert_eq!(kept.library, "A");
+        let still = get_component(&conn, "kicad", "R_0603").unwrap().unwrap();
+        assert_eq!(still.library, "B");
+    }
+
+    #[test]
+    fn a_library_name_with_a_colon_is_refused() {
+        let conn = Connection::open_in_memory().unwrap();
+        initialize_schema(&conn).unwrap();
+
+        let err = insert_library(&conn, &library("A:B")).expect_err("the name holds ':'");
+        assert_eq!(
+            err.to_string(),
+            "A:B.pretty is not indexed: a design names a footprint \
+             `kicad::<library>:<name>`, so a library name cannot hold ':'"
+        );
+        let libraries: usize = conn
+            .query_row("SELECT count(*) FROM libraries", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(libraries, 0);
+    }
+
+    #[test]
+    fn a_reimport_removes_the_rows_of_files_gone() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        initialize_schema(&conn).unwrap();
+        insert_library(&conn, &library("A")).unwrap();
+        insert_library(&conn, &library("B")).unwrap();
+        replace_library_components(
+            &mut conn,
+            "kicad",
+            "A",
+            &[footprint("SOT-23-5", "A"), footprint("R_0603", "A")],
+        )
+        .unwrap();
+        replace_library_components(&mut conn, "kicad", "B", &[footprint("R_0603", "B")]).unwrap();
+
+        let again =
+            replace_library_components(&mut conn, "kicad", "A", &[footprint("SOT-23-5", "A")])
+                .unwrap();
+
+        let rows_of_a: usize = conn
+            .query_row(
+                "SELECT count(*) FROM components WHERE library = 'A'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!((again.written, again.removed), (1, 1));
+        assert_eq!(rows_of_a, again.written);
+        assert!(get_component(&conn, "kicad", "A:R_0603").unwrap().is_none());
+        assert!(get_component(&conn, "kicad", "B:R_0603").unwrap().is_some());
+        let found = crate::search::search_components(
+            &conn,
+            "R_0603",
+            &crate::models::SearchFilters::default(),
+        )
+        .unwrap();
+        let names: Vec<String> = found.iter().map(|hit| hit.component.full_name()).collect();
+        assert_eq!(names, ["kicad::B:R_0603"]);
+    }
+
+    /// The schema before the library was part of the key, as a file written
+    /// then holds it.
+    const KEYED_BY_NAME: &str = r#"
+        CREATE TABLE libraries (
+            source TEXT NOT NULL, name TEXT NOT NULL, path TEXT, version TEXT,
+            enabled INTEGER NOT NULL DEFAULT 1, component_count INTEGER DEFAULT 0,
+            PRIMARY KEY (source, name));
+        CREATE TABLE components (
+            rowid INTEGER PRIMARY KEY AUTOINCREMENT,
+            source TEXT NOT NULL, name TEXT NOT NULL, library TEXT NOT NULL,
+            category TEXT, footprint_data TEXT, description TEXT, datasheet_url TEXT,
+            manufacturer TEXT, mpn TEXT, value TEXT, package TEXT, step_model_path TEXT,
+            metadata_json TEXT,
+            UNIQUE(source, name),
+            FOREIGN KEY (source, library) REFERENCES libraries(source, name));
+        CREATE INDEX idx_components_category ON components(category);
+        CREATE INDEX idx_components_manufacturer ON components(manufacturer);
+        CREATE INDEX idx_components_value ON components(value);
+        CREATE VIRTUAL TABLE components_fts USING fts5(
+            source, name, category, description, manufacturer, mpn, value, package);
+        CREATE TRIGGER components_ai AFTER INSERT ON components BEGIN
+            INSERT INTO components_fts(source, name, category, description, manufacturer, mpn, value, package)
+            VALUES (new.source, new.name, new.category, new.description, new.manufacturer, new.mpn, new.value, new.package);
+        END;
+        CREATE TRIGGER components_ad AFTER DELETE ON components BEGIN
+            DELETE FROM components_fts WHERE source = old.source AND name = old.name;
+        END;
+        INSERT INTO libraries (source, name) VALUES ('kicad', 'A'), ('kicad', 'B');
+        INSERT INTO components (source, name, library, footprint_data, metadata_json) VALUES
+            ('kicad', 'SOT-23-5', 'A', '(footprint "SOT-23-5")', '{}'),
+            ('kicad', 'R_0603', 'A', '(footprint "R_0603")', '{}'),
+            ('kicad', 'C_0603', 'B', '(footprint "C_0603")', '{}');
+    "#;
+
+    #[test]
+    fn a_file_in_the_old_schema_keeps_every_row_and_takes_the_library_key() {
+        let dir = std::env::temp_dir().join(format!("cypcb-old-schema-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("cypcb-library.db");
+        let _ = std::fs::remove_file(&file);
+        Connection::open(&file)
+            .unwrap()
+            .execute_batch(KEYED_BY_NAME)
+            .unwrap();
+
+        let conn = Connection::open(&file).unwrap();
+        initialize_schema(&conn).unwrap();
+
+        let rows: Vec<(i64, String)> = conn
+            .prepare("SELECT rowid, library || ':' || name FROM components ORDER BY rowid")
+            .unwrap()
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(
+            rows,
+            [
+                (1, "A:SOT-23-5".to_string()),
+                (2, "A:R_0603".to_string()),
+                (3, "B:C_0603".to_string())
+            ]
+        );
+        let version: i64 = conn
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, SCHEMA_VERSION);
+
+        // The new key: B takes a name A holds.
+        insert_component(&conn, &footprint("SOT-23-5", "B")).unwrap();
+        assert!(get_component(&conn, "kicad", "A:SOT-23-5")
+            .unwrap()
+            .is_some());
+        assert!(get_component(&conn, "kicad", "B:SOT-23-5")
+            .unwrap()
+            .is_some());
+
+        // The search index was built again from the copied rows.
+        let found = crate::search::search_components(
+            &conn,
+            "C_0603",
+            &crate::models::SearchFilters::default(),
+        )
+        .unwrap();
+        let names: Vec<String> = found.iter().map(|hit| hit.component.full_name()).collect();
+        assert_eq!(names, ["kicad::B:C_0603"]);
+
+        // A second open finds the file in the current schema and leaves it.
+        drop(conn);
+        let conn = Connection::open(&file).unwrap();
+        initialize_schema(&conn).unwrap();
+        let rows: usize = conn
+            .query_row("SELECT count(*) FROM components", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(rows, 4);
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
@@ -766,19 +1070,15 @@ mod tests {
         let rows: usize = conn
             .query_row("SELECT count(*) FROM components", [], |row| row.get(0))
             .unwrap();
-        assert_eq!((first.written, second.written, again.written), (2, 1, 1));
+        assert_eq!((first.written, second.written, again.written), (2, 2, 1));
         assert_eq!(rows, first.written + second.written);
         assert_eq!(
             first.rejected.len() + second.rejected.len() + again.rejected.len(),
-            2
+            1
         );
         assert!(matches!(
             first.rejected[0],
             Rejection::TwiceInOneLibrary { .. }
-        ));
-        assert!(matches!(
-            second.rejected[0],
-            Rejection::HeldByAnotherLibrary { .. }
         ));
     }
 }

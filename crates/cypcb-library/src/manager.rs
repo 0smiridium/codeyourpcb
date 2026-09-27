@@ -1,5 +1,5 @@
 use crate::error::LibraryError;
-use crate::models::{Component, ComponentId, LibraryInfo, SearchFilters, SearchResult};
+use crate::models::{Component, LibraryInfo, SearchFilters, SearchResult};
 use crate::schema;
 use crate::search;
 use crate::sources::custom::CustomSource;
@@ -98,15 +98,15 @@ impl LibraryManager {
     ///
     /// Parses all .kicad_mod files in the library and indexes them for search.
     ///
+    /// The library then holds what its folder holds: a footprint whose file
+    /// is gone since the last import is removed from the index.
+    ///
     /// # Returns
-    /// The components written, and the ones refused with the reason
+    /// The components written, the ones refused with the reason, and the
+    /// rows removed
     pub fn import_kicad_library(&self, name: &str) -> Result<schema::BatchOutcome, LibraryError> {
         // Get components from KiCad source
         let components = self.kicad_source.import_library(name)?;
-
-        if components.is_empty() {
-            return Ok(schema::BatchOutcome::default());
-        }
 
         // Create library record
         let library = LibraryInfo {
@@ -119,10 +119,11 @@ impl LibraryManager {
         };
 
         let mut conn = self.conn.lock().unwrap();
-        schema::insert_library(&conn, &library)?;
+        if !components.is_empty() {
+            schema::insert_library(&conn, &library)?;
+        }
 
-        // Batch insert components
-        let outcome = schema::insert_components_batch(&mut conn, &components)?;
+        let outcome = schema::replace_library_components(&mut conn, "kicad", name, &components)?;
 
         // The count is the rows the library holds, not the files it was read from.
         conn.execute(
@@ -250,14 +251,15 @@ impl LibraryManager {
 
     // ========== Component Access ==========
 
-    /// Get a specific component by source and name
+    /// The component a design means by `source::written`, where `written`
+    /// is `library:name` or a bare `name`; see [`schema::get_component`].
     pub fn get_component(
         &self,
         source: &str,
-        name: &str,
+        written: &str,
     ) -> Result<Option<Component>, LibraryError> {
         let conn = self.conn.lock().unwrap();
-        schema::get_component(&conn, source, name)
+        schema::get_component(&conn, source, written)
     }
 
     /// Get total count of components in database
@@ -266,11 +268,11 @@ impl LibraryManager {
         search::component_count(&conn)
     }
 
-    /// Every component that carries a footprint, by the id `library search`
-    /// prints and a design writes.
-    pub fn footprint_ids(&self) -> Result<Vec<ComponentId>, LibraryError> {
+    /// Every component that carries a footprint, by the name `library search`
+    /// prints and a design writes: `source::library:name`.
+    pub fn footprint_names(&self) -> Result<Vec<String>, LibraryError> {
         let conn = self.conn.lock().unwrap();
-        schema::footprint_ids(&conn)
+        schema::footprint_names(&conn)
     }
 
     // ========== Custom Library Operations ==========

@@ -133,11 +133,12 @@ fn make_component_hover_enhanced(doc: &DocumentState, comp: &ComponentDef) -> Ho
     let lib = library_of(doc, &built_in);
     let mut lines = vec![format!("**{}** ({:?})", comp.refdes.value, comp.kind)];
 
-    // Footprint info with size if available
+    // Footprint info with size if available. A name from the index is shown
+    // in full, `source::library:name`, whatever the design shortened it to.
     if let Some(fp) = lib.get(&comp.footprint.value) {
         lines.push(format!(
             "Footprint: {} ({:.2}mm x {:.2}mm)",
-            comp.footprint.value,
+            lib.full_name(&comp.footprint.value),
             fp.bounds.width().to_mm(),
             fp.bounds.height().to_mm()
         ));
@@ -250,7 +251,8 @@ fn make_footprint_hover(doc: &DocumentState, footprint_name: &str) -> HoverInfo 
             "SMD"
         };
 
-        let mut lines = vec![format!("**Footprint: {}**", fp.name)];
+        // A name from the index in full, whatever the design shortened it to.
+        let mut lines = vec![format!("**Footprint: {}**", lib.full_name(&fp.name))];
         lines.push(format!("Type: {}", pad_type));
         lines.push(format!("Pads: {}", fp.pads.len()));
         lines.push(String::new());

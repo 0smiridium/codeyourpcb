@@ -576,6 +576,12 @@ pub struct FootprintLibrary {
     /// reports these instead of an unknown footprint: the name may well be in
     /// a file nobody could open.
     unreadable: HashMap<String, String>,
+    /// Names a source holds more than once, with each one it could mean.
+    /// The sync reports these: the source does not pick one for the design.
+    ambiguous: HashMap<String, Vec<String>>,
+    /// Names a source resolved, with the full name of what it found, when
+    /// the design wrote it shorter.
+    spelled_out: HashMap<String, String>,
 }
 
 impl FootprintLibrary {
@@ -697,6 +703,30 @@ impl FootprintLibrary {
     /// be read.
     pub fn why_unreadable(&self, name: &str) -> Option<&str> {
         self.unreadable.get(name).map(String::as_str)
+    }
+
+    /// Record that a source holds `name` more than once, and what each one
+    /// is called in full.
+    pub fn mark_ambiguous(&mut self, name: impl Into<String>, candidates: Vec<String>) {
+        self.ambiguous.insert(name.into(), candidates);
+    }
+
+    /// Every footprint `name` could mean, in full, when its source holds it
+    /// more than once.
+    pub fn candidates_for(&self, name: &str) -> Option<&[String]> {
+        self.ambiguous.get(name).map(Vec::as_slice)
+    }
+
+    /// Record that the footprint registered as `name` is called `full` by
+    /// its source.
+    pub fn spell_out(&mut self, name: impl Into<String>, full: impl Into<String>) {
+        self.spelled_out.insert(name.into(), full.into());
+    }
+
+    /// The full name of the footprint registered as `name`: what its source
+    /// calls it, or `name` itself.
+    pub fn full_name<'a>(&'a self, name: &'a str) -> &'a str {
+        self.spelled_out.get(name).map_or(name, String::as_str)
     }
 
     /// Register all built-in SMD footprints.

@@ -193,7 +193,7 @@ fn the_design_reads_the_nearest_index_and_nothing_else() {
     let (code, said) = run(&["check".into(), "board.cypcb".into()], &alone);
     assert_eq!(code, Some(1), "{said}");
     assert!(
-        said.contains("unknown footprint: 'kicad::R_0603_1608Metric'")
+        said.contains("unknown footprint: 'kicad::Test_Library:R_0603_1608Metric'")
             && said.contains("cypcb library import"),
         "with no index the part is refused, and the refusal says where the name \
          is looked for:\n{said}"

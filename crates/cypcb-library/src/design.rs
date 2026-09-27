@@ -1,10 +1,15 @@
 //! The footprints a design names from an index, and where that index is.
 //!
-//! A design writes `"kicad::R_0603_1608Metric"` after `cypcb library import`
-//! put that footprint in `cypcb-library.db`. Nothing outside the `library`
+//! A design writes `"kicad::Resistor_SMD:R_0603_1608Metric"` after
+//! `cypcb library import` put that footprint in `cypcb-library.db`. Nothing outside the `library`
 //! command read that file, so the name came back as `unknown footprint`
 //! although the search had just found it. This is the one place a design's
 //! `source::name` is looked up, for every command and for the language server.
+//!
+//! The name after `source::` is `library:name`, the way KiCad's `LIB_ID`
+//! writes a footprint, so two libraries can hold one name. A bare `name`
+//! still resolves when one library alone holds it; when several do, the
+//! design is told each one in full and none is picked for it.
 //!
 //! A name is resolved from these sources, first match wins:
 //!
@@ -81,11 +86,16 @@ pub fn footprint_library_for(ast: &SourceFile, design: &Path) -> FootprintLibrar
         let component = match manager.get_component(source, name) {
             Ok(Some(component)) => component,
             Ok(None) => continue,
+            Err(crate::LibraryError::Ambiguous { candidates, .. }) => {
+                library.mark_ambiguous(full_name, candidates);
+                continue;
+            }
             Err(error) => {
                 library.mark_unreadable(full_name, unreadable(&error));
                 continue;
             }
         };
+        let spelled_out = component.full_name();
         // An entry can hold a part's details and no footprint. It was left
         // out like a name the index does not hold, and the design was told
         // `unknown footprint` about a name the index does hold.
@@ -99,6 +109,7 @@ pub fn footprint_library_for(ast: &SourceFile, design: &Path) -> FootprintLibrar
         };
         match cypcb_kicad::import_footprint_from_str(&text) {
             Ok(mut footprint) => {
+                library.spell_out(full_name.clone(), spelled_out);
                 footprint.name = full_name;
                 library.register(footprint);
             }
@@ -153,7 +164,8 @@ fn collect(definitions: &[Definition], names: &mut BTreeSet<String>) {
 }
 
 /// Every name the index nearest `design` can resolve, written the way a
-/// design writes it and `cypcb library search` prints it: `source::name`.
+/// design writes it and `cypcb library search` prints it:
+/// `source::library:name`.
 ///
 /// Empty when there is no index or it cannot be read;
 /// [`index_unreadable_for`] says why it could not.
@@ -202,11 +214,11 @@ fn reading_for(design: &Path) -> Option<(PathBuf, Reading)> {
 }
 
 fn read_names(index: &Path, stamp: Stamp) -> Reading {
-    let names = LibraryManager::new(index).and_then(|manager| manager.footprint_ids());
+    let names = LibraryManager::new(index).and_then(|manager| manager.footprint_names());
     match names {
-        Ok(ids) => Reading {
+        Ok(names) => Reading {
             stamp,
-            names: ids.iter().map(|id| id.to_string()).collect(),
+            names: names.into(),
             why: None,
         },
         Err(error) => Reading {
