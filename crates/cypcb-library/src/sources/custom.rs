@@ -230,16 +230,14 @@ impl LibrarySource for CustomSource {
         let mut stmt = conn.prepare(
             "SELECT source, name, library, category, footprint_data,
                     description, datasheet_url, manufacturer, mpn, value, package,
-                    step_model_path, metadata_json
+                    step_model_path
              FROM components
              WHERE source = ?1 AND library = ?2",
         )?;
 
         let components = stmt
             .query_map(rusqlite::params!["custom", name], |row| {
-                let metadata_json: String = row.get(12)?;
-                let metadata = serde_json::from_str(&metadata_json).unwrap_or_default();
-
+                let metadata = schema::metadata_from_row(row, 5)?;
                 Ok(Component {
                     id: ComponentId::new(row.get::<_, String>(0)?, row.get::<_, String>(1)?),
                     library: row.get(2)?,
@@ -391,24 +389,10 @@ mod tests {
                     .unwrap()
                     .component_count;
                 let r = components.iter().find(|c| c.id.name == "R_10K");
-                // The manufacturer is written to its column, not to the
-                // metadata `import_library` reads back.
-                let manufacturer: Option<String> = source
-                    .conn
-                    .lock()
-                    .unwrap()
-                    .query_row(
-                        "SELECT manufacturer FROM components
-                         WHERE source = 'custom' AND library = ?1 AND name = 'R_10K'",
-                        [library],
-                        |row| row.get(0),
-                    )
-                    .ok()
-                    .flatten();
                 (
                     format!("{library}:{}", components.len()),
                     r.and_then(|c| c.category.clone()),
-                    manufacturer,
+                    r.and_then(|c| c.metadata.manufacturer.clone()),
                     count,
                 )
             })
@@ -512,5 +496,142 @@ mod tests {
         // Components should also be deleted
         let components = source.import_library("MyComponents").unwrap();
         assert_eq!(components.len(), 0);
+    }
+
+    /// A's `R_10K` with every field set to `tag`.
+    fn tagged(tag: &str) -> Component {
+        let field = |name: &str| Some(format!("{tag} {name}"));
+        Component {
+            category: field("category"),
+            metadata: ComponentMetadata {
+                description: field("description"),
+                datasheet_url: field("datasheet"),
+                manufacturer: field("manufacturer"),
+                mpn: field("mpn"),
+                value: field("value"),
+                package: field("package"),
+                step_model_path: field("step"),
+            },
+            ..part("R_10K", "A")
+        }
+    }
+
+    /// The category and the seven metadata fields, in the order of
+    /// [`tagged`].
+    fn fields(category: Option<String>, m: ComponentMetadata) -> [Option<String>; 8] {
+        [
+            category,
+            m.description,
+            m.datasheet_url,
+            m.manufacturer,
+            m.mpn,
+            m.value,
+            m.package,
+            m.step_model_path,
+        ]
+    }
+
+    /// Check that each reader of A's `R_10K` returns `want`: the component by
+    /// its name, the search, the metadata alone (it has no category) and the
+    /// library's list.
+    fn assert_every_reader_returns(source: &CustomSource, want: &Component) {
+        let want = fields(want.category.clone(), want.metadata.clone());
+        let conn = source.conn.lock().unwrap();
+        let by_name = schema::get_component(&conn, "custom", "A:R_10K")
+            .unwrap()
+            .unwrap();
+        let searched = crate::search::search_components(&conn, "R_10K", &Default::default())
+            .unwrap()
+            .remove(0)
+            .component;
+        let metadata = crate::metadata::get_component_metadata(&conn, "custom", "R_10K")
+            .unwrap()
+            .unwrap();
+        drop(conn);
+        let listed = source
+            .import_library("A")
+            .unwrap()
+            .into_iter()
+            .find(|c| c.id.name == "R_10K")
+            .unwrap();
+        let mut without_category = want.clone();
+        without_category[0] = None;
+        for (reader, got, want) in [
+            (
+                "get_component",
+                fields(by_name.category, by_name.metadata),
+                &want,
+            ),
+            (
+                "search",
+                fields(searched.category, searched.metadata),
+                &want,
+            ),
+            (
+                "get_component_metadata",
+                fields(None, metadata),
+                &without_category,
+            ),
+            (
+                "import_library",
+                fields(listed.category, listed.metadata),
+                &want,
+            ),
+        ] {
+            assert_eq!(&got, want, "{reader}");
+        }
+    }
+
+    /// The manufacturer was edited in its column, and every reader but the
+    /// search read a JSON copy the edit did not change: the old name came
+    /// back. Each field now has one place, and each writer writes it there.
+    #[test]
+    fn every_field_comes_back_from_every_reader_as_last_written() {
+        let conn = Connection::open_in_memory().unwrap();
+        initialize_schema(&conn).unwrap();
+        let source = CustomSource::new(Arc::new(Mutex::new(conn)));
+        source.create_library("A").unwrap();
+
+        source.add_component("A", tagged("added")).unwrap();
+        assert_every_reader_returns(&source, &tagged("added"));
+
+        // Imported again: every field is written again.
+        schema::insert_component(&source.conn.lock().unwrap(), &tagged("imported")).unwrap();
+        assert_every_reader_returns(&source, &tagged("imported"));
+
+        // Edited: each edit writes its one field.
+        source
+            .update_component_category("A:R_10K", "edited category")
+            .unwrap();
+        source
+            .update_component_manufacturer("A:R_10K", "edited manufacturer")
+            .unwrap();
+        crate::metadata::associate_step_model(
+            &source.conn.lock().unwrap(),
+            "custom",
+            "R_10K",
+            "edited step",
+        )
+        .unwrap();
+        let mut edited = tagged("imported");
+        edited.category = Some("edited category".to_string());
+        edited.metadata.manufacturer = Some("edited manufacturer".to_string());
+        edited.metadata.step_model_path = Some("edited step".to_string());
+        assert_every_reader_returns(&source, &edited);
+
+        let conn = source.conn.lock().unwrap();
+        let found = |query: &str, manufacturer: Option<&str>| {
+            let filters = crate::models::SearchFilters {
+                manufacturer: manufacturer.map(str::to_string),
+                ..Default::default()
+            };
+            crate::search::search_components(&conn, query, &filters)
+                .unwrap()
+                .len()
+        };
+        assert_eq!(found("edited manufacturer", None), 1);
+        assert_eq!(found("R_10K", Some("edited manufacturer")), 1);
+        assert_eq!(found("imported manufacturer", None), 0);
+        assert_eq!(found("R_10K", Some("imported manufacturer")), 0);
     }
 }

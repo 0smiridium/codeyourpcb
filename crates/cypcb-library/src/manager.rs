@@ -669,8 +669,7 @@ mod tests {
         // Verify updates
         let retrieved = manager.get_component("custom", "R_Test").unwrap().unwrap();
         assert_eq!(retrieved.category, Some("Passive/Resistors".to_string()));
-        // Note: manufacturer update only updates the column, not the metadata_json
-        // This is expected behavior based on CustomSource implementation
+        assert_eq!(retrieved.metadata.manufacturer, Some("NewMfg".to_string()));
     }
 
     #[test]
