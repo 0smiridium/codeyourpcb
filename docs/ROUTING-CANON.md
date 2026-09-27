@@ -2777,6 +2777,13 @@ not clipping the rim. Five of six do; the claim that a sharp entry on a circle
 clips its rim is now a claim about most of them, not all, and the one that
 does not is the case to read first.
 
+Since 2026-09-27, when two pads of one net that touch became one piece and
+`multi_ic` routes three GND connections fewer, there are **8 sharp entries
+among 180 into a circular land**: J4.2 and J5.2 came in at 0.06 of their
+chords each, on copper rerouted around those pairs. Seven of eight clip the
+rim; J2.9 is still the one that does not. Measured 2026-09-27 by
+`cargo test -p cypcb-autoroute --test sharp_entry_anatomy -- --ignored`.
+
 **One statement about these entries is forced and must never be reported as
 evidence.** The distance from a pad centre to the line of a segment is at most
 the distance to either of its ends, so a sharp entry necessarily has its inside
