@@ -357,10 +357,10 @@ pub struct PathFinderLoopResult {
 /// to the pad may start or stop anywhere on it, instead of running beside the
 /// wire to reach the pad at its end. The other pads of the piece are part of
 /// it, so a piece that is two pads touching and nothing else is reached at
-/// whichever of the two is nearer. Such a pad is reached at its centre and
-/// opens its zone, as a pad the ratsnest routes to does: a goal anywhere in
-/// its copper let a route graze its edge and stop, which R-08 measured on
-/// multi_ic's J2.5 at 29.9 degrees.
+/// whichever of the two is nearer. Such a pad is reached at its centre, as a
+/// pad the ratsnest routes to is: a goal anywhere in its copper let a route
+/// graze its edge and stop, which R-08 measured on multi_ic's J2.5 at 29.9
+/// degrees.
 fn drop_pads_existing_copper_already_joins(
     world: &mut BoardWorld,
     grid: &mut RoutingGrid,
@@ -402,7 +402,14 @@ fn drop_pads_existing_copper_already_joins(
                     let piece = &pieces.pieces[index];
                     let mut cells = Vec::new();
                     // The other pads of the piece, each at its centre on
-                    // every layer it is on, with its zone opened.
+                    // every layer it is on. A pad on
+                    // the kept pad's own cell - one land drawn twice, as a
+                    // USB-C receptacle's A4 and B9 are - adds no copper, and
+                    // registering it only made the kept pad a start for every
+                    // later connection of the net: on esp32_starter VBUS then
+                    // routed across the channel BOOT needs, and BOOT stayed
+                    // open.
+                    let kept_at = crate::orchestrator::pad_to_grid_node(grid, pad);
                     for (other, _) in net
                         .pads
                         .iter()
@@ -410,12 +417,14 @@ fn drop_pads_existing_copper_already_joins(
                         .filter(|(other, of)| **of == Some(index) && !std::ptr::eq(*other, pad))
                     {
                         let (gx, gy, _) = crate::orchestrator::pad_to_grid_node(grid, other);
+                        if (gx, gy) == (kept_at.0, kept_at.1) {
+                            continue;
+                        }
                         for layer in 0..grid.layer_count() {
                             if other.layer_mask & (1 << layer) != 0 {
                                 cells.push((gx, gy, layer));
                             }
                         }
-                        grid.add_joined_pad(net.net_id.id(), other.clone());
                     }
                     if piece.is_conductor() {
                         for segment in &piece.segments {
@@ -433,8 +442,7 @@ fn drop_pads_existing_copper_already_joins(
                             cells.extend(grid.copper_cells_of_via(via));
                         }
                     }
-                    let at = crate::orchestrator::pad_to_grid_node(grid, pad);
-                    grid.set_hand_copper(net.net_id.id(), at, cells);
+                    grid.set_hand_copper(net.net_id.id(), kept_at, cells);
                     pads.push(pad.clone());
                 }
                 None => pads.push(pad.clone()),
@@ -554,7 +562,6 @@ pub fn pathfinder_loop(
         .map(|net| {
             net.pads
                 .iter()
-                .chain(grid.joined_pads(net.net_id.id()))
                 .map(|pad| {
                     crate::orchestrator::pad_to_zone_with_margin(
                         grid,

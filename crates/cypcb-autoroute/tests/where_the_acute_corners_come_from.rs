@@ -152,7 +152,7 @@ fn the_smoother_is_not_where_they_come_from() {
     //
     // Since two pads of one net whose copper touches are one piece
     // (2026-09-27), the router no longer routes between U5.2 and U5.3, J2.4
-    // and J2.5, or J2.7 and J2.8 on multi_ic, and that board reads 57 / 61
+    // and J2.5, or J2.7 and J2.8 on multi_ic, and that board reads 58 / 62
     // with 5 / 4 not computed. The other five boards are unchanged.
     //
     // What it claimed: no board draws a corner with the smoother that it does
@@ -232,12 +232,12 @@ fn the_smoother_is_not_where_they_come_from() {
     // replacement segments stopped crossing other nets and two of multi_ic's
     // corners went with them while qfp_fanout gained one. 166 since
     // 2026-09-25, on the boards read the right way up rather than mirrored.
-    // 158 since 2026-09-27, when two pads of one net that touch became one
-    // piece and multi_ic stopped routing between them (65 -> 57).
+    // 159 since 2026-09-27, when two pads of one net that touch became one
+    // piece and multi_ic stopped routing between them (65 -> 58).
     let total: usize = table.iter().map(|(_, on, _)| on.acute).sum();
     assert!(
-        total >= 158,
-        "the six fixtures drew 158 acute corners between them on 2026-09-27 \
+        total >= 159,
+        "the six fixtures drew 159 acute corners between them on 2026-09-27 \
          and this run counted {total}"
     );
 }

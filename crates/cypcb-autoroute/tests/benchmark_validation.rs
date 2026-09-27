@@ -403,7 +403,7 @@ type Ratchet = (&'static str, &'static str, u32, u32, u32, u32);
 /// whose copper touches became one piece, so the router no longer routes
 /// between U5.2 and U5.3, J2.4 and J2.5, or J2.7 and J2.8, and the floor
 /// follows those three GND connections down. The rest of the board routes to
-/// different copper around them - 1115 routes to 1121 - and three entries
+/// different copper around them - 1115 routes to 1130 - and three entries
 /// sharpen that did not before: J4.2 at 43.7, J5.2 at 43.7 and C5.2 at 21.8
 /// degrees; C11.2 at 41.9 is gone. C5.2 is a VCC_3V3 trace laid across its
 /// land in this run, a short `trace 'VCC_3V3' <-> C5` at 0.00mm, and the GND

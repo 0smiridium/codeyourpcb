@@ -129,6 +129,44 @@ fn two_pads_of_two_nets_edge_to_edge_are_a_short_and_stay_two() {
 }
 
 #[test]
+fn two_round_pads_whose_boxes_overlap_and_copper_does_not_are_two() {
+    // Two 0.6mm round pads of one net, corner to corner: their centres
+    // 0.428mm apart on each axis, 0.6053mm apart in all, so their bounding
+    // boxes overlap and their copper is 0.0053mm apart. The box test lets the
+    // pair through to the pad-against-pad measurement, and that measurement
+    // is what keeps them two pieces.
+    let source = r#"version 1
+board diagonal {
+    size 30mm x 20mm
+    layers 2
+}
+footprint DOT {
+    description "one round pad"
+    courtyard 1mm x 1mm
+    pad 1 circle at 0mm, 0mm size 0.6mm x 0.6mm
+}
+component P1 generic "DOT" {
+    at 5mm, 10mm
+}
+component P2 generic "DOT" {
+    at 5.428mm, 10.428mm
+}
+net VCC {
+    P1.1
+    P2.1
+}
+"#;
+    let apart = snapshot(source);
+    assert_eq!(
+        unrouted(&apart),
+        ["P1.1", "P2.1"],
+        "{:#?}",
+        apart.violations
+    );
+    assert_eq!(apart.ratsnest.len(), 1, "{:#?}", apart.ratsnest);
+}
+
+#[test]
 fn multi_ic_touching_ground_pads_are_no_longer_missing() {
     let source =
         std::fs::read_to_string(repo().join("tests/fixtures/benchmark/multi_ic.kicad_pcb"))
