@@ -244,7 +244,7 @@ pub fn build_job_file(
                 "Application": "cypcb",
                 "Version": env!("CARGO_PKG_VERSION"),
             },
-            "CreationDate": chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S%z").to_string(),
+            "CreationDate": crate::stamp::now().format("%Y-%m-%dT%H:%M:%S%z").to_string(),
         }),
     );
     job.insert("GeneralSpecs".to_string(), Value::Object(general));

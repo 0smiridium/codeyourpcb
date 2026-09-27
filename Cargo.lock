@@ -1023,6 +1023,7 @@ dependencies = [
 name = "cypcb-cli"
 version = "0.1.0-beta"
 dependencies = [
+ "chrono",
  "clap",
  "cypcb-autoroute",
  "cypcb-core",

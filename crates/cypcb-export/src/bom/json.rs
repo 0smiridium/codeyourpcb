@@ -4,7 +4,6 @@
 //! like board name, export date, and total component counts.
 
 use crate::bom::{group_components, BomEntry};
-use chrono::Utc;
 use cypcb_world::BoardWorld;
 use serde::{Deserialize, Serialize};
 
@@ -81,7 +80,7 @@ pub fn export_bom_json(
     let doc = BomDocument {
         metadata: BomMetadata {
             board_name: board_name.unwrap_or("board").to_string(),
-            export_date: Utc::now().to_rfc3339(),
+            export_date: crate::stamp::now().to_rfc3339(),
             unique_components,
             total_components,
         },

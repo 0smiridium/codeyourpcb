@@ -258,7 +258,7 @@ fn drill_header(drill_type: Option<DrillType>, span: (Layer, Layer), total_layer
     ));
     header.push_str(&format!(
         "; #@! TF.CreationDate,{}\n",
-        chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S%z")
+        crate::stamp::now().format("%Y-%m-%dT%H:%M:%S%z")
     ));
     header.push_str(&format!(
         "; #@! TF.FileFunction,{}\n",

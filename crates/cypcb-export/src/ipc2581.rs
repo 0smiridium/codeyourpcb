@@ -154,7 +154,9 @@ pub fn export_ipc2581_now(
         world,
         library,
         house,
-        &chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S%z").to_string(),
+        &crate::stamp::now()
+            .format("%Y-%m-%dT%H:%M:%S%z")
+            .to_string(),
     )
 }
 
@@ -175,7 +177,9 @@ pub fn export_ipc2581_now_with(
         world,
         library,
         house,
-        &chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S%z").to_string(),
+        &crate::stamp::now()
+            .format("%Y-%m-%dT%H:%M:%S%z")
+            .to_string(),
         pour,
     )
 }
