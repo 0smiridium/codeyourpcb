@@ -137,6 +137,12 @@ pub struct RoutingGrid {
     /// beside it.
     hand_copper: HashMap<(u32, HandCell), Vec<HandCell>>,
 
+    /// The pads of each net a pad of the ratsnest touches, which are not in
+    /// the ratsnest themselves. A route may end on one of them, and it enters
+    /// it as it enters a pad it routes to: through the pad's zone, to its
+    /// centre.
+    joined_pads: HashMap<u32, Vec<crate::orchestrator::PadTarget>>,
+
     /// The holes on the board before routing - pins, slots and the designer's
     /// vias - as the path of the bit's centre and its radius, in nm. Filled
     /// only for a search that prices a via's distance from them.
@@ -251,6 +257,7 @@ impl RoutingGrid {
             pad_net,
             fixed_net,
             hand_copper: HashMap::new(),
+            joined_pads: HashMap::new(),
             fixed_holes: Vec::new(),
         };
 
@@ -717,6 +724,16 @@ impl RoutingGrid {
         if !cells.is_empty() {
             self.hand_copper.insert((net, pad), cells);
         }
+    }
+
+    /// Record a pad of `net` that a pad of the ratsnest touches.
+    pub fn add_joined_pad(&mut self, net: u32, pad: crate::orchestrator::PadTarget) {
+        self.joined_pads.entry(net).or_default().push(pad);
+    }
+
+    /// The pads of `net` a pad of the ratsnest touches, or nothing.
+    pub fn joined_pads(&self, net: u32) -> &[crate::orchestrator::PadTarget] {
+        self.joined_pads.get(&net).map_or(&[], Vec::as_slice)
     }
 
     /// Record the holes on the board before routing.
@@ -1317,6 +1334,7 @@ pub fn make_test_grid(width: u32, height: u32, resolution_nm: i64, layers: u8) -
         pad_net: vec![u32::MAX; total],
         fixed_net: vec![u32::MAX; total],
         hand_copper: HashMap::new(),
+        joined_pads: HashMap::new(),
         fixed_holes: Vec::new(),
     }
 }

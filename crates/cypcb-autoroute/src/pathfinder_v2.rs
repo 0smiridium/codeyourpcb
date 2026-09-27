@@ -355,7 +355,12 @@ pub struct PathFinderLoopResult {
 ///
 /// The pad kept for a piece of copper hands that piece to the grid: a route
 /// to the pad may start or stop anywhere on it, instead of running beside the
-/// wire to reach the pad at its end.
+/// wire to reach the pad at its end. The other pads of the piece are part of
+/// it, so a piece that is two pads touching and nothing else is reached at
+/// whichever of the two is nearer. Such a pad is reached at its centre and
+/// opens its zone, as a pad the ratsnest routes to does: a goal anywhere in
+/// its copper let a route graze its edge and stop, which R-08 measured on
+/// multi_ic's J2.5 at 29.9 degrees.
 fn drop_pads_existing_copper_already_joins(
     world: &mut BoardWorld,
     grid: &mut RoutingGrid,
@@ -369,15 +374,21 @@ fn drop_pads_existing_copper_already_joins(
         };
 
         // One pad per piece, plus every pad the pieces do not name.
+        let piece_of: Vec<Option<usize>> = net
+            .pads
+            .iter()
+            .map(|pad| {
+                pieces.pieces.iter().position(|piece| {
+                    piece
+                        .pins
+                        .iter()
+                        .any(|pin| pin.at == pad.position && pin.pin == pad.pin)
+                })
+            })
+            .collect();
         let mut kept: Vec<usize> = Vec::new();
         let mut pads = Vec::with_capacity(net.pads.len());
-        for pad in &net.pads {
-            let piece = pieces.pieces.iter().position(|piece| {
-                piece
-                    .pins
-                    .iter()
-                    .any(|pin| pin.at == pad.position && pin.pin == pad.pin)
-            });
+        for (pad, &piece) in net.pads.iter().zip(&piece_of) {
             match piece {
                 Some(index) if kept.contains(&index) => {
                     tracing::debug!(
@@ -389,8 +400,24 @@ fn drop_pads_existing_copper_already_joins(
                 Some(index) => {
                     kept.push(index);
                     let piece = &pieces.pieces[index];
+                    let mut cells = Vec::new();
+                    // The other pads of the piece, each at its centre on
+                    // every layer it is on, with its zone opened.
+                    for (other, _) in net
+                        .pads
+                        .iter()
+                        .zip(&piece_of)
+                        .filter(|(other, of)| **of == Some(index) && !std::ptr::eq(*other, pad))
+                    {
+                        let (gx, gy, _) = crate::orchestrator::pad_to_grid_node(grid, other);
+                        for layer in 0..grid.layer_count() {
+                            if other.layer_mask & (1 << layer) != 0 {
+                                cells.push((gx, gy, layer));
+                            }
+                        }
+                        grid.add_joined_pad(net.net_id.id(), other.clone());
+                    }
                     if piece.is_conductor() {
-                        let mut cells = Vec::new();
                         for segment in &piece.segments {
                             let Some(layer) = crate::grid::layer_to_index(segment.layer) else {
                                 continue;
@@ -405,9 +432,9 @@ fn drop_pads_existing_copper_already_joins(
                         for via in &piece.vias {
                             cells.extend(grid.copper_cells_of_via(via));
                         }
-                        let at = crate::orchestrator::pad_to_grid_node(grid, pad);
-                        grid.set_hand_copper(net.net_id.id(), at, cells);
                     }
+                    let at = crate::orchestrator::pad_to_grid_node(grid, pad);
+                    grid.set_hand_copper(net.net_id.id(), at, cells);
                     pads.push(pad.clone());
                 }
                 None => pads.push(pad.clone()),
@@ -527,6 +554,7 @@ pub fn pathfinder_loop(
         .map(|net| {
             net.pads
                 .iter()
+                .chain(grid.joined_pads(net.net_id.id()))
                 .map(|pad| {
                     crate::orchestrator::pad_to_zone_with_margin(
                         grid,
