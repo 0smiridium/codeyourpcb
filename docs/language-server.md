@@ -103,9 +103,10 @@ cargo test -p cypcb-lsp
 # What the server actually advertises, which the table above has to match.
 cargo test -p cypcb-lsp --test the_manual_matches_the_server
 
-# Completion against 10,000 generated index names, inside 50ms. Timing, so it
-# runs only when asked for, and only means something in release.
-cargo test -p cypcb-lsp --release --test the_language_server_answers -- --ignored --nocapture
+# Completion against 10,000 generated index names offers every one, in under
+# 85 bytes of answer a name. The size, not a time: it is what serialising and
+# parsing the answer cost, and it is the same on every host.
+cargo test -p cypcb-lsp --test the_language_server_answers -- completion_over_ten_thousand --nocapture
 ```
 
 Last verified: 2026-09-27.

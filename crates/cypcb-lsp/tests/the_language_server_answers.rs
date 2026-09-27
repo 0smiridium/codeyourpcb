@@ -25,7 +25,7 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::mpsc::{channel, Receiver, RecvTimeoutError};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use serde_json::{json, Value};
 
@@ -910,15 +910,20 @@ component R1 resistor "kicad::SYN_00001" {
 "#;
 
 /// Completion inside a footprint string, against an index the size of the
-/// KiCad library, answers inside 50ms - the first request and every one after.
+/// KiCad library, offers every name, and each in fewer than
+/// [`BYTES_PER_NAME`] bytes of answer.
 ///
-/// Timing, so it is not part of the suite. Run it in release:
-/// `cargo test -p cypcb-lsp --release --test the_language_server_answers -- --ignored --nocapture`
+/// This held a time, 50ms, and was ignored, because a time on a shared host is
+/// not a fact about the code: a debug build under load took a median of 152ms.
+/// Measured on 2026-09-27 over 50 requests, a release build took a median of
+/// 10.8ms, and the index was not what it spent it on: the names are read once
+/// per index file, in 0.03ms after the first. Serialising the answer took
+/// 3.9ms and parsing it in the client 2.7ms, and both grow with its size. So
+/// the size is what this holds - it is the same on every host.
 #[test]
-#[ignore = "timing: run in release with --ignored"]
-fn completion_over_ten_thousand_indexed_names_answers_inside_50ms() {
+fn completion_over_ten_thousand_indexed_names_offers_each_in_a_bounded_answer() {
     const NAMES: usize = 10_000;
-    let dir = a_project_with_an_index_of("timing", NAMES);
+    let dir = a_project_with_an_index_of("size", NAMES);
     let path = dir.join("board.cypcb");
     std::fs::write(&path, SIZED_BOARD).expect("the board is written");
     let uri = format!("file://{}", path.display());
@@ -929,35 +934,38 @@ fn completion_over_ten_thousand_indexed_names_answers_inside_50ms() {
     server.diagnostics_for(&uri);
 
     let (line, character) = position_of(SIZED_BOARD, "SYN_00001\"");
-    let mut times = Vec::new();
-    let mut offered = 0;
-    for _ in 0..21 {
-        let started = Instant::now();
-        let result = server.request(
+    let mut complete = || {
+        server.request(
             "textDocument/completion",
             json!({
                 "textDocument": {"uri": uri},
                 "position": {"line": line, "character": character},
             }),
-        );
-        times.push(started.elapsed());
-        offered = result
-            .pointer("/result")
-            .and_then(Value::as_array)
-            .map_or(0, Vec::len);
-    }
-    let first = times[0];
-    let mut after = times[1..].to_vec();
-    after.sort();
-    let median = after[after.len() / 2];
-    let worst = after[after.len() - 1];
-    eprintln!(
-        "COMPLETION names={NAMES} items={offered} first={first:?} median={median:?} worst={worst:?}"
-    );
+        )["result"]
+            .clone()
+    };
+    let first = complete();
+    let again = complete();
     let _ = std::fs::remove_dir_all(&dir);
 
+    let offered = first.as_array().map_or(0, Vec::len);
+    let bytes = serde_json::to_string(&first)
+        .expect("the answer serialises")
+        .len();
+    eprintln!("COMPLETION names={NAMES} items={offered} bytes={bytes}");
     assert!(offered >= NAMES, "every indexed name is offered: {offered}");
-    let limit = Duration::from_millis(50);
-    assert!(first < limit, "the first request took {first:?}");
-    assert!(worst < limit, "the slowest later request took {worst:?}");
+    assert!(
+        bytes < offered * BYTES_PER_NAME,
+        "{bytes} bytes for {offered} names - more than {BYTES_PER_NAME} a name, and the answer is \
+         serialised by the server and parsed by the client on every request"
+    );
+    assert_eq!(
+        again, first,
+        "a second request over the same index answers the same"
+    );
 }
+
+/// 81 bytes a name on 2026-09-27: a label of 26 characters, the kind and
+/// `from cypcb-library.db`. Writing `insertTextFormat` on every item, as the
+/// server did, made it 102.
+const BYTES_PER_NAME: usize = 85;

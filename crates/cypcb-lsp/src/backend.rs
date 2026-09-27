@@ -325,11 +325,12 @@ impl LanguageServer for Backend {
                         CompletionItemKind::Snippet => LspCompletionItemKind::SNIPPET,
                     };
 
-                    let insert_text_format = if item.is_snippet {
-                        Some(InsertTextFormat::SNIPPET)
-                    } else {
-                        Some(InsertTextFormat::PLAIN_TEXT)
-                    };
+                    // Plain text is what a client assumes when the format is
+                    // left out, so only a snippet says it. Written on every
+                    // item it was a fifth of a completion over an index of
+                    // ten thousand names, which the server serialises and
+                    // the client parses on each request.
+                    let insert_text_format = item.is_snippet.then_some(InsertTextFormat::SNIPPET);
 
                     LspCompletionItem {
                         label: item.label,
