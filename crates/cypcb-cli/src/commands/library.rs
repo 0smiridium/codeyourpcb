@@ -111,6 +111,12 @@ impl LibraryCommand {
                     total += outcome.written;
                     refused += outcome.rejected.len();
                     println!("{name}: {} footprint(s)", outcome.written);
+                    if outcome.removed > 0 {
+                        println!(
+                            "{name}: {} footprint(s) removed from the index: their files are gone",
+                            outcome.removed
+                        );
+                    }
                 }
                 println!(
                     "Indexed {total} footprint(s) from {} librar{} into {}",
@@ -138,16 +144,16 @@ impl LibraryCommand {
                     return Ok(());
                 }
 
-                // The name first, spelled the way a design writes it: the
-                // index is asked for `source::name`, and a bare name printed
-                // here was one a person copied into a design and saw refused.
+                // The name first, spelled the way a design writes it:
+                // `source::library:name`. A bare name printed here was one a
+                // person copied into a design and saw refused, and two
+                // libraries can hold one name.
                 for result in &results {
                     let component = &result.component;
                     let description = component.metadata.description.as_deref().unwrap_or("");
                     println!(
-                        "{}  [{}]{}{}",
-                        component.id,
-                        component.library,
+                        "{}{}{}",
+                        component.full_name(),
                         if description.is_empty() { "" } else { "  " },
                         description
                     );

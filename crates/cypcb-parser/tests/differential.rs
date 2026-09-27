@@ -185,3 +185,29 @@ fn both_readers_place_a_courtyard_where_the_file_says() {
         .collect();
     assert_eq!(centres, vec![Some((0.0, -1.27)), None]);
 }
+
+#[test]
+fn both_readers_keep_a_footprint_named_with_its_library_whole() {
+    // A design names an index footprint `kicad::<library>:<name>`. The name is
+    // a quoted string to both readers, so the `::` and the `:` in it are text
+    // and not syntax, and the name reaches the index whole.
+    let source = "component U1 ic \"kicad::Package_TO_SOT_SMD:SOT-23-5\" {\n    \
+                  at 5mm, 5mm\n}\n";
+    let (expected, actual) = (parse(source), reader::read(source));
+    assert!(expected.errors.is_empty(), "{:?}", expected.errors);
+    assert!(actual.errors.is_empty(), "{:?}", actual.errors);
+    assert_eq!(shape(&expected.value), shape(&actual.value));
+
+    let names: Vec<&str> = actual
+        .value
+        .definitions
+        .iter()
+        .filter_map(|definition| match definition {
+            cypcb_parser::Definition::Component(component) => {
+                Some(component.footprint.value.as_str())
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(names, ["kicad::Package_TO_SOT_SMD:SOT-23-5"]);
+}

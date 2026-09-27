@@ -380,16 +380,21 @@ pub fn footprint_completions() -> Vec<CompletionItem> {
 }
 
 /// Every footprint name this document may write: the built-ins, the
-/// `footprint` blocks the design defines, and each `source::name` the index
-/// nearest the document holds.
+/// `footprint` blocks the design defines, and each `source::library:name` the
+/// index nearest the document holds.
 ///
 /// Only the built-ins were offered, so a design's own footprint and a name
 /// `cypcb library import` had just put in the index both had to be typed from
 /// memory. Index names are written as `cypcb library search` prints them,
 /// which is how a design has to write them to resolve.
 pub fn footprint_completions_for(doc: &DocumentState) -> Vec<CompletionItem> {
+    // A name the design shortened is offered in full from the index below,
+    // not the way the design wrote it.
     let mut items = match &doc.world {
-        Some(world) => library_completions(world.footprints()),
+        Some(world) => library_completions(world.footprints())
+            .into_iter()
+            .filter(|item| world.footprints().full_name(&item.label) == item.label)
+            .collect(),
         None => footprint_completions(),
     };
     if let Some(path) = &doc.path {

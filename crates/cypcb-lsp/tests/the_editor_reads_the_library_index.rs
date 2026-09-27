@@ -6,6 +6,10 @@
 //! a design naming `kicad::R_0603_1608Metric` after `cypcb library import` was
 //! underlined as an unknown footprint in the editor while the command line
 //! accepted it, and hovering the name called it a typo.
+//!
+//! The board writes the bare name, which still resolves while one library
+//! alone holds it; the editor shows and offers it in full,
+//! `kicad::Test_Library:R_0603_1608Metric`.
 
 use std::path::{Path, PathBuf};
 
@@ -93,6 +97,28 @@ fn a_footprint_the_index_holds_is_no_error_and_hovers_with_its_pads() {
     );
     let card = card_over_the_footprint(&doc);
     assert!(card.contains("Pads: 2"), "{card}");
+    assert!(
+        card.contains("**Footprint: kicad::Test_Library:R_0603_1608Metric**"),
+        "the card names the footprint in full: {card}"
+    );
+    let (line, _) = BOARD
+        .lines()
+        .enumerate()
+        .find(|(_, line)| line.starts_with("component R1 "))
+        .expect("the board places R1");
+    let part = hover_at_position(
+        &doc,
+        &Position {
+            line: line as u32,
+            character: 0,
+        },
+    )
+    .expect("hovering the part says something")
+    .content;
+    assert!(
+        part.contains("Footprint: kicad::Test_Library:R_0603_1608Metric ("),
+        "the part's card names its footprint in full: {part}"
+    );
 
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -255,7 +281,7 @@ fn completion_offers_the_design_and_the_index_as_search_prints_them() {
             .search(query, &SearchFilters::default())
             .expect("the search runs")
         {
-            printed.push(found.component.id.to_string());
+            printed.push(found.component.full_name());
         }
     }
     assert_eq!(
@@ -266,6 +292,12 @@ fn completion_offers_the_design_and_the_index_as_search_prints_them() {
     for name in &printed {
         assert!(labels.contains(name), "{name} is not offered: {labels:?}");
     }
+    assert!(
+        !labels
+            .iter()
+            .any(|label| label == "kicad::R_0603_1608Metric"),
+        "the board's short name is offered in full only: {labels:?}"
+    );
 
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -312,11 +344,13 @@ fn a_name_imported_while_the_board_is_open_is_offered_next_time() {
     assert!(
         before
             .iter()
-            .any(|label| label == "kicad::R_0603_1608Metric"),
+            .any(|label| label == "kicad::Test_Library:R_0603_1608Metric"),
         "the index was read before the import: {before:?}"
     );
     assert!(
-        !before.iter().any(|label| label == "kicad::LATE_ARRIVAL"),
+        !before
+            .iter()
+            .any(|label| label == "kicad::Late:LATE_ARRIVAL"),
         "{before:?}"
     );
 
@@ -330,7 +364,9 @@ fn a_name_imported_while_the_board_is_open_is_offered_next_time() {
 
     let after = offered_in(&dir);
     assert!(
-        after.iter().any(|label| label == "kicad::LATE_ARRIVAL"),
+        after
+            .iter()
+            .any(|label| label == "kicad::Late:LATE_ARRIVAL"),
         "imported after the first request and not offered: {after:?}"
     );
 
@@ -363,7 +399,7 @@ fn an_import_that_keeps_the_old_modification_time_is_still_seen() {
     let index = dir.join("cypcb-library.db");
     let before = offered_in(&dir);
     assert!(
-        !before.iter().any(|label| label == "kicad::SAME_TICK"),
+        !before.iter().any(|label| label == "kicad::Late:SAME_TICK"),
         "{before:?}"
     );
     let modified = std::fs::metadata(&index)
@@ -385,8 +421,34 @@ fn an_import_that_keeps_the_old_modification_time_is_still_seen() {
 
     let after = offered_in(&dir);
     assert!(
-        after.iter().any(|label| label == "kicad::SAME_TICK"),
+        after.iter().any(|label| label == "kicad::Late:SAME_TICK"),
         "the import kept the old modification time and was missed: {after:?}"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A second library holding the board's bare name: the editor reports the
+/// name with both footprints in full and picks neither.
+#[test]
+fn a_bare_name_two_libraries_hold_is_reported_with_both() {
+    let dir = project("two-libraries", true);
+    let libraries = one_footprint_library(&dir, "R_0603_1608Metric");
+    let mut manager = LibraryManager::new(&dir.join("cypcb-library.db")).expect("the index opens");
+    manager.add_kicad_search_path(libraries.clone());
+    manager
+        .auto_import_folder(&libraries)
+        .expect("the second library imports");
+    drop(manager);
+
+    let doc = opened(&dir);
+    let errors: Vec<String> = doc.sync_errors.iter().map(ToString::to_string).collect();
+    assert_eq!(
+        errors,
+        [
+            "footprint 'kicad::R_0603_1608Metric' is in more than one library: \
+          kicad::Late:R_0603_1608Metric, kicad::Test_Library:R_0603_1608Metric"
+        ],
     );
 
     let _ = std::fs::remove_dir_all(&dir);

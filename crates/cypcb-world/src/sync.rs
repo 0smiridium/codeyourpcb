@@ -99,6 +99,19 @@ pub enum SyncError {
         span: miette::SourceSpan,
     },
 
+    /// A component's footprint name is held more than once by its source,
+    /// such as a bare `kicad::SOT-23-5` that two libraries hold.
+    AmbiguousFootprint {
+        /// The footprint name the component uses.
+        name: String,
+        /// Every footprint it could mean, in full.
+        candidates: Vec<String>,
+        /// Source code for miette display.
+        src: String,
+        /// Source span of the footprint reference.
+        span: miette::SourceSpan,
+    },
+
     /// A reference designator is used more than once.
     DuplicateRefDes {
         /// The duplicated refdes.
@@ -285,6 +298,13 @@ impl fmt::Display for SyncError {
                 write!(f, "unknown footprint: '{}'", name)
             }
             SyncError::UnreadableFootprint { why, .. } => write!(f, "{why}"),
+            SyncError::AmbiguousFootprint {
+                name, candidates, ..
+            } => write!(
+                f,
+                "footprint '{name}' is in more than one library: {}",
+                candidates.join(", ")
+            ),
             SyncError::DuplicateRefDes { refdes, .. } => {
                 write!(f, "duplicate reference designator: '{}'", refdes)
             }
@@ -382,6 +402,9 @@ impl Diagnostic for SyncError {
             SyncError::UnreadableFootprint { .. } => {
                 Some(Box::new("cypcb::sync::unreadable_footprint"))
             }
+            SyncError::AmbiguousFootprint { .. } => {
+                Some(Box::new("cypcb::sync::ambiguous_footprint"))
+            }
             SyncError::DuplicateRefDes { .. } => Some(Box::new("cypcb::sync::duplicate_refdes")),
             SyncError::UnknownComponent { .. } => Some(Box::new("cypcb::sync::unknown_component")),
             SyncError::UnknownCoverageRegion { .. } => {
@@ -419,6 +442,9 @@ impl Diagnostic for SyncError {
             SyncError::UnreadableFootprint { name, .. } => Some(Box::new(format!(
                 "'{name}' comes from that file, and the file gives no footprint for it"
             ))),
+            SyncError::AmbiguousFootprint { .. } => Some(Box::new(
+                "write the one you mean in full: `source::library:name`",
+            )),
             SyncError::DuplicateRefDes { .. } => {
                 Some(Box::new("each component must have a unique reference designator"))
             }
@@ -507,6 +533,7 @@ impl Diagnostic for SyncError {
         match self {
             SyncError::UnknownFootprint { src, .. } => Some(src),
             SyncError::UnreadableFootprint { src, .. } => Some(src),
+            SyncError::AmbiguousFootprint { src, .. } => Some(src),
             SyncError::DuplicateRefDes { src, .. } => Some(src),
             SyncError::UnknownComponent { src, .. } => Some(src),
             SyncError::UnknownCoverageRegion { src, .. } => Some(src),
@@ -533,6 +560,9 @@ impl Diagnostic for SyncError {
             }
             SyncError::UnreadableFootprint { span, .. } => Some(Box::new(std::iter::once(
                 LabeledSpan::new_with_span(Some("footprint not read".to_string()), *span),
+            ))),
+            SyncError::AmbiguousFootprint { span, .. } => Some(Box::new(std::iter::once(
+                LabeledSpan::new_with_span(Some("more than one footprint".to_string()), *span),
             ))),
             SyncError::DuplicateRefDes {
                 first, duplicate, ..
@@ -1356,6 +1386,16 @@ fn sync_component(
         result.errors.push(SyncError::UnreadableFootprint {
             name: footprint_name.clone(),
             why: why.to_string(),
+            src: source.to_string(),
+            span: span_to_source_span(&comp.footprint.span),
+        });
+    } else if let Some(candidates) = footprint_lib
+        .candidates_for(footprint_name)
+        .filter(|_| !footprint_lib.contains(footprint_name))
+    {
+        result.errors.push(SyncError::AmbiguousFootprint {
+            name: footprint_name.clone(),
+            candidates: candidates.to_vec(),
             src: source.to_string(),
             span: span_to_source_span(&comp.footprint.span),
         });
