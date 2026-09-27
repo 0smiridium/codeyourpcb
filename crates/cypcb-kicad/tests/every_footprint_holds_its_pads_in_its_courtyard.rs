@@ -27,27 +27,35 @@ fn shown(path: &Path) -> String {
         .to_string()
 }
 
-fn files_ending(root: &Path, extension: &str, found: &mut Vec<PathBuf>) {
-    let Ok(entries) = std::fs::read_dir(root) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        let name = entry.file_name();
-        let name = name.to_string_lossy();
-        if path.is_dir() {
-            if name != "target" && name != "node_modules" && !name.starts_with('.') {
-                files_ending(&path, extension, found);
-            }
-        } else if name.ends_with(extension) {
-            found.push(path);
-        }
-    }
-}
-
+/// Every file git tracks that ends in `extension`.
+///
+/// The disk holds more than the repository does. The main checkout carries
+/// ignored copies of other projects under `viewer/`, and one of them has
+/// `.kicad_mod` files with pads outside their courtyards: a walk of the disk
+/// read them as this repository's footprints and failed there, while a clean
+/// clone passed.
 fn corpus(extension: &str) -> Vec<PathBuf> {
-    let mut found = Vec::new();
-    files_ending(&repo_root(), extension, &mut found);
+    let root = repo_root();
+    let output = std::process::Command::new("git")
+        .args(["ls-files", "-z"])
+        .current_dir(&root)
+        .output()
+        .expect("git ls-files: the suite runs from a checkout, so git must answer");
+    assert!(
+        output.status.success(),
+        "git ls-files failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let mut found: Vec<PathBuf> = String::from_utf8_lossy(&output.stdout)
+        .split('\0')
+        .filter(|file| file.ends_with(extension))
+        .filter(|file| {
+            !file
+                .split('/')
+                .any(|part| part == "target" || part == "node_modules" || part.starts_with('.'))
+        })
+        .map(|file| root.join(file))
+        .collect();
     found.sort();
     found
 }
