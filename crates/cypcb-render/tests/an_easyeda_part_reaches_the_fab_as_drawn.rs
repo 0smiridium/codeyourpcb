@@ -51,7 +51,16 @@ fn board(pads: &[PadInfo], silk: &[SilkInfo]) -> (BoardWorld, FootprintLibrary) 
     });
     let parsed = cypcb_parser::parse(SOURCE);
     let mut world = BoardWorld::new();
-    cypcb_world::sync_ast_to_world(&parsed.value, SOURCE, &mut world, &mut library);
+    let synced = cypcb_world::sync_ast_to_world(&parsed.value, SOURCE, &mut world, &mut library);
+    assert!(
+        synced.errors.is_empty(),
+        "the board in this test does not load: {:?}",
+        synced
+            .errors
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+    );
     (world, library)
 }
 

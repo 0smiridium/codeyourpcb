@@ -918,9 +918,27 @@ fn smoothing_never_adds_a_net_piece_on_its_own_copper() {
     let source = std::fs::read_to_string(&path)
         .unwrap_or_else(|e| panic!("Failed to read {}: {e}", path.display()));
     let parsed = cypcb_parser::parse(&source);
+    assert!(
+        parsed.errors.is_empty(),
+        "mains-sequencer does not parse: {:?}",
+        parsed
+            .errors
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+    );
     let mut world = BoardWorld::new();
     let mut library = FootprintLibrary::new();
-    let _ = sync_ast_to_world(&parsed.value, &source, &mut world, &mut library);
+    let synced = sync_ast_to_world(&parsed.value, &source, &mut world, &mut library);
+    assert!(
+        synced.errors.is_empty(),
+        "mains-sequencer does not load: {:?}",
+        synced
+            .errors
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+    );
     let splits = splits_on_own_copper(world, library);
     eprintln!("  mains-sequencer:");
     failures.extend(smoothing_added_a_piece("mains-sequencer", &splits));

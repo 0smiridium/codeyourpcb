@@ -103,7 +103,16 @@ fn the_writer_says_the_corner_the_reader_read() {
     let parsed = cypcb_parser::parse(&source);
     let mut world = BoardWorld::new();
     let mut library = FootprintLibrary::new();
-    sync_ast_to_world(&parsed.value, &source, &mut world, &mut library);
+    let synced = sync_ast_to_world(&parsed.value, &source, &mut world, &mut library);
+    assert!(
+        synced.errors.is_empty(),
+        "the design with a corner does not load: {:?}",
+        synced
+            .errors
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+    );
 
     let written = cypcb_world::dsl::board_as_dsl(&mut world);
     assert!(
