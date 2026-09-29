@@ -364,7 +364,7 @@ pub fn completion_at_position(doc: &DocumentState, position: &Position) -> Vec<C
     let context = find_completion_context(ast, &doc.content, offset);
 
     match context {
-        CompletionContext::ComponentFootprint => footprint_completions(),
+        CompletionContext::ComponentFootprint => footprint_completions_for(doc),
         CompletionContext::NetName => net_completions(ast),
         CompletionContext::ComponentName => component_completions(ast),
         CompletionContext::PropertyKey(prop_ctx) => property_completions(&prop_ctx),
@@ -376,7 +376,58 @@ pub fn completion_at_position(doc: &DocumentState, position: &Position) -> Vec<C
 
 /// Generate footprint name completions.
 pub fn footprint_completions() -> Vec<CompletionItem> {
-    let lib = FootprintLibrary::new();
+    library_completions(&FootprintLibrary::new())
+}
+
+/// Every footprint name this document may write: the built-ins, the
+/// `footprint` blocks the design defines, and each `source::library:name` the
+/// index nearest the document holds.
+///
+/// Only the built-ins were offered, so a design's own footprint and a name
+/// `cypcb library import` had just put in the index both had to be typed from
+/// memory. Index names are written as `cypcb library search` prints them,
+/// which is how a design has to write them to resolve.
+pub fn footprint_completions_for(doc: &DocumentState) -> Vec<CompletionItem> {
+    // A name the design shortened is offered in full from the index below,
+    // not the way the design wrote it.
+    let mut items = match &doc.world {
+        Some(world) => library_completions(world.footprints())
+            .into_iter()
+            .filter(|item| world.footprints().full_name(&item.label) == item.label)
+            .collect(),
+        None => footprint_completions(),
+    };
+    if let Some(path) = &doc.path {
+        let offered: std::collections::HashSet<String> =
+            items.iter().map(|item| item.label.clone()).collect();
+        for name in cypcb_library::design::index_names_for(path).iter() {
+            if !offered.contains(name) {
+                items.push(
+                    CompletionItem::new(name.clone(), CompletionItemKind::Class)
+                        .with_detail(format!("from {}", cypcb_library::design::INDEX_FILE)),
+                );
+            }
+        }
+    }
+    items.sort_by(|a, b| a.label.cmp(&b.label));
+    items
+}
+
+/// Why the completion at `position` offers no names from the index nearest
+/// the document, when that index is there and does not read. The editor
+/// logs it, so a list with the index names missing is not taken for an index
+/// that holds none.
+pub fn unread_index_at(doc: &DocumentState, position: &Position) -> Option<String> {
+    let offset = doc.position_to_offset(position)?;
+    let ast = doc.ast.as_ref()?;
+    if find_completion_context(ast, &doc.content, offset) != CompletionContext::ComponentFootprint {
+        return None;
+    }
+    cypcb_library::design::index_unreadable_for(doc.path.as_ref()?)
+}
+
+/// One completion per footprint in `lib`, sorted by name.
+fn library_completions(lib: &FootprintLibrary) -> Vec<CompletionItem> {
     let mut items = Vec::new();
 
     for (name, fp) in lib.iter() {

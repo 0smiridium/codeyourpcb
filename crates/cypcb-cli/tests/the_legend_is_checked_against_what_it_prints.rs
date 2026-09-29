@@ -141,6 +141,7 @@ fn a_name_that_would_cross_a_neighbours_pad_is_clipped_off_it() {
         Side::Top,
         &CoordinateFormat::FORMAT_MM_2_6,
         &SilkConfig::default(),
+        cypcb_export::stamp::Stamp::UNIX_EPOCH,
     )
     .expect("the legend exports");
     let points = legend_points(&gerber);
@@ -255,6 +256,7 @@ fn a_name_the_clipping_ate_is_reported_rather_than_left_on_the_board() {
         Side::Top,
         &CoordinateFormat::FORMAT_MM_2_6,
         &SilkConfig::default(),
+        cypcb_export::stamp::Stamp::UNIX_EPOCH,
     )
     .expect("the legend exports");
 

@@ -12,6 +12,7 @@
 use std::path::{Path, PathBuf};
 
 use cypcb_export::{run_export, ExportJob};
+use cypcb_fixtures::tree::{tracked_in, written_entries};
 use cypcb_world::footprint::FootprintLibrary;
 use cypcb_world::{sync_ast_to_world, BoardWorld};
 
@@ -27,9 +28,8 @@ fn examples_dir() -> PathBuf {
 fn boards() -> Vec<(String, BoardWorld, FootprintLibrary)> {
     let mut out = Vec::new();
 
-    let mut files: Vec<PathBuf> = std::fs::read_dir(examples_dir())
-        .expect("the examples directory is there")
-        .filter_map(|entry| entry.ok().map(|e| e.path()))
+    let mut files: Vec<PathBuf> = tracked_in(examples_dir())
+        .into_iter()
         .filter(|path| path.extension().is_some_and(|ext| ext == "cypcb"))
         .collect();
     files.sort();
@@ -95,6 +95,7 @@ fn export_to_temp(
         output_dir: dir.to_path_buf(),
         preset,
         board_name: name.trim_end_matches(".cypcb").to_string(),
+        stamp: cypcb_export::stamp::Stamp::UNIX_EPOCH,
     };
     let result = run_export(&job, world, library)
         .unwrap_or_else(|e| panic!("{name} failed to export: {e:?}"));
@@ -106,7 +107,7 @@ fn export_to_temp(
 /// subdirectory and assembly files in another.
 fn files_under(dir: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
-    let Ok(entries) = std::fs::read_dir(dir) else {
+    let Ok(entries) = written_entries(dir) else {
         return out;
     };
     for entry in entries.flatten() {
@@ -227,28 +228,39 @@ fn excellon_holes(text: &str) -> Vec<(f64, f64, f64)> {
     out
 }
 
-/// Every placed part on a board, as (refdes, x mm, y mm).
+/// Every placed part on a board, as (refdes, x mm, y mm) of the point the
+/// placement file is to give: `Footprint::placement_centre`, turned with the
+/// part, which is the origin of a surface-mount part and the middle of a
+/// through-hole part's pads.
 fn placed_parts(world: &mut BoardWorld, library: &FootprintLibrary) -> Vec<(String, f64, f64)> {
-    use cypcb_world::components::{FootprintRef, Position, RefDes};
+    use cypcb_world::components::{place_pad, FootprintRef, Position, RefDes, Rotation};
 
     let ecs = world.ecs_mut();
-    let mut query = ecs.query::<(&RefDes, &Position, &FootprintRef)>();
+    let mut query = ecs.query::<(&RefDes, &Position, &FootprintRef, Option<&Rotation>)>();
     let mut parts: Vec<(String, f64, f64)> = query
         .iter(ecs)
         // A mounting hole is a part on the board and not a part anybody
         // places: it has no copper, so there is nothing to solder and nothing
         // for a machine to pick. The placement file leaves it out on purpose,
         // and this counted it as missing.
-        .filter(|(_, _, footprint_ref)| {
+        .filter(|(_, _, footprint_ref, _)| {
             library
                 .get(&footprint_ref.0)
                 .is_none_or(|footprint| !footprint.is_mechanical())
         })
-        .map(|(refdes, position, _)| {
+        .map(|(refdes, position, footprint_ref, rotation)| {
+            let point = match library.get(&footprint_ref.0) {
+                Some(footprint) => place_pad(
+                    position.0,
+                    footprint.placement_centre(),
+                    rotation.copied().unwrap_or(Rotation::ZERO),
+                ),
+                None => position.0,
+            };
             (
                 refdes.as_str().to_string(),
-                position.0.x.0 as f64 / 1_000_000.0,
-                position.0.y.0 as f64 / 1_000_000.0,
+                point.x.0 as f64 / 1_000_000.0,
+                point.y.0 as f64 / 1_000_000.0,
             )
         })
         .collect();

@@ -17,6 +17,14 @@ use cypcb_world::footprint::FootprintLibrary;
 use cypcb_world::sync_ast_to_world;
 use cypcb_world::BoardWorld;
 
+/// What `score` prints: the metrics, and the table they were counted against.
+#[derive(serde::Serialize)]
+struct Scored<'a> {
+    preset: &'a str,
+    #[serde(flatten)]
+    score: &'a cypcb_autoroute::scoring::RoutingScore,
+}
+
 /// Route a board and print quality metrics as JSON.
 ///
 /// The board arrives unrouted: this routes it and grades what it laid. The
@@ -85,7 +93,7 @@ impl ScoreCommand {
 
         // Build world from AST
         let mut world = BoardWorld::new();
-        let mut library = FootprintLibrary::new();
+        let mut library = cypcb_library::design::footprint_library_for(&ast, &self.file);
         let sync_result = sync_ast_to_world(&ast, &source, &mut world, &mut library);
 
         if !sync_result.errors.is_empty() {
@@ -108,7 +116,8 @@ impl ScoreCommand {
 
     /// Score a board that is already in the model, however it was read.
     fn score_world(&self, mut world: BoardWorld, library: FootprintLibrary) -> Result<()> {
-        // Build rules (JLCPCB 2-layer default)
+        // The table `check` would use: named by the caller, then by the board,
+        // then JLCPCB for the board's layer count.
         let preset = crate::preset_choice::resolve(self.preset.as_deref(), &world)?;
         let rules = cypcb_drc::ruleset_for_world(preset, &world);
 
@@ -157,10 +166,15 @@ impl ScoreCommand {
         let drc_rules = DesignRules::from_constraints(&preset.constraints());
         let score = score_board(&mut world, &drc_rules, &weights);
 
-        // Output as pretty JSON
-        let json = serde_json::to_string_pretty(&score)
-            .into_diagnostic()
-            .wrap_err("Failed to serialize RoutingScore to JSON")?;
+        // Output as pretty JSON, led by the table it was scored against. The
+        // doc on `--preset` says which rules decide the number, and the number
+        // used to arrive without them.
+        let json = serde_json::to_string_pretty(&Scored {
+            preset: preset.name(),
+            score: &score,
+        })
+        .into_diagnostic()
+        .wrap_err("Failed to serialize RoutingScore to JSON")?;
 
         println!("{json}");
 

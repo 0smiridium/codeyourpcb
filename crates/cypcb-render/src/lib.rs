@@ -330,6 +330,7 @@ impl PcbEngine {
     /// of them. Anything the host did not supply comes back as the same
     /// unreadable-import error, saying what it did supply.
     #[cfg(any(feature = "native", feature = "wasm"))]
+    #[must_use = "the errors of a board that did not load are in this string"]
     pub fn load_source_with_imports(&mut self, source: &str, files_json: &str) -> String {
         let files: std::collections::HashMap<String, String> =
             match serde_json::from_str(files_json) {
@@ -344,6 +345,7 @@ impl PcbEngine {
     }
 
     #[cfg(any(feature = "native", feature = "wasm"))]
+    #[must_use = "the errors of a board that did not load are in this string"]
     pub fn load_source(&mut self, source: &str) -> String {
         // No host files: an import then reports that nothing was supplied,
         // which is a truer answer than the `unknown module` the design used to
@@ -433,22 +435,22 @@ impl PcbEngine {
         // the editor cannot, because it still has to draw the board - so it
         // falls back to JLCPCB and says so here rather than grading the design
         // against a table nobody asked for and looking correct while it does.
-        if let Some(named) = self.world.fab() {
-            if cypcb_rules::presets::RulesPreset::from_name(named).is_none() {
-                let available: Vec<&str> = cypcb_rules::presets::RulesPreset::all()
-                    .iter()
-                    .map(|preset| preset.name())
-                    .collect();
-                let message = format!(
-                    "The board asks for fab '{}', which is not a preset this tool has. \
-                     Checking against jlcpcb instead. Available presets: {}",
-                    named,
-                    available.join(", ")
-                );
-                let (start, end) = fab_span(&resolved).unwrap_or((0, 0));
-                self.diagnostics
-                    .push(SourceDiagnostic::from_span(message, source, start, end));
-            }
+        if let (fallback, Some(unknown)) = cypcb_drc::table_for_editor(&self.world) {
+            let named = &unknown.name;
+            let available: Vec<&str> = cypcb_rules::presets::RulesPreset::all()
+                .iter()
+                .map(|preset| preset.name())
+                .collect();
+            let message = format!(
+                "The board asks for fab '{}', which is not a preset this tool has. \
+                 Checking against {} instead. Available presets: {}",
+                named,
+                fallback.name(),
+                available.join(", ")
+            );
+            let (start, end) = fab_span(&resolved).unwrap_or((0, 0));
+            self.diagnostics
+                .push(SourceDiagnostic::from_span(message, source, start, end));
         }
 
         // And what the board did not say, which the browser never showed at
@@ -514,8 +516,18 @@ impl PcbEngine {
 
         // The copper the file already carries. Without it a routed board opens
         // as an unrouted one.
+        //
+        // Drawn by hand, as `from-kicad` marks it: the person drew it in KiCad,
+        // and the router's own copper is what a reroute clears. Marked as the
+        // router's, a KiCad board's copper was ripped up by the first autoroute
+        // in the viewer and not by the same run on the command line, and a save
+        // reported it as routed copper written down as drawn by hand.
         if let Some(routes) = parsed.reference_routes {
-            cypcb_router::apply_routes(&mut self.world, &routes);
+            cypcb_router::apply_routes_as(
+                &mut self.world,
+                &routes,
+                cypcb_world::components::trace::TraceSource::Manual,
+            );
             self.world
                 .rebuild_spatial_index_from_library(&self.footprint_lib);
         }
@@ -734,6 +746,28 @@ impl PcbEngine {
         cypcb_world::dsl::traces_as_dsl(&mut self.world)
     }
 
+    /// The whole board as a `.cypcb` design - the text `from-kicad` writes.
+    ///
+    /// A KiCad board is saved as a design of this language, beside the file it
+    /// came from and never over it: the importer does not carry everything a
+    /// `.kicad_pcb` holds, so writing the board back as KiCad would lose what
+    /// it drops, and splicing trace blocks onto the KiCad text lost the copper.
+    pub fn design_as_dsl(&mut self) -> String {
+        cypcb_world::dsl::board_as_dsl(&mut self.world)
+    }
+
+    /// What [`Self::design_as_dsl`] cannot write, one line per kind, joined by
+    /// newlines: `2 zone(s) not written: ...`. Empty when the design is the
+    /// whole board.
+    ///
+    /// A person who saves a KiCad board as a design believes they have their
+    /// board, so what the file leaves out is shown to them, not left in it.
+    pub fn design_not_written(&mut self) -> String {
+        cypcb_world::dsl::board_as_dsl_reporting(&mut self.world)
+            .not_written
+            .join("\n")
+    }
+
     /// Get the minimum copper clearance in nanometers.
     ///
     /// Returns the clearance value from the active design rules (default preset).
@@ -753,11 +787,18 @@ impl PcbEngine {
         serde_json::to_string(&self.diagnostics).unwrap_or_else(|_| "[]".to_string())
     }
 
+    /// The table the board is checked against, named as `cypcb check` names
+    /// it after "against", so the status can say what the count is measured by.
+    pub fn drc_table(&self) -> String {
+        self.preset().name().to_string()
+    }
+
     /// Get the last check's DRC violations as JSON.
     ///
-    /// This is the rule's own report: one entry per pair of features the
-    /// clearance rule put in fault, which is one entry per pair of segments
-    /// where two features touch along a run. The reading is grouped by contact
+    /// This is the rule's own report: one entry per place the clearance rule
+    /// put in fault - one unbroken run of a trace too close to one pad, via or
+    /// other net's trace - so a pair of features in fault at two separate
+    /// places is two entries. The reading is grouped by contact
     /// where it is shown - `cypcb check`, the language server and the viewer's
     /// error panel all do that - and the count here stays as the rule made it.
     ///
@@ -962,27 +1003,54 @@ impl PcbEngine {
             )
         })
     }
+
+    /// Put the routes of a Specctra session file on the board.
+    ///
+    /// The routes a server router sent back, or a `.ses` file the user opened,
+    /// used to go into the viewer's copy of the board only: the engine never
+    /// held them, so the ratsnest was worked out a second time in TypeScript
+    /// and the checker did not see the copper at all. They now land in the
+    /// world, as the FreeRouting runner puts them there, and the ratsnest and
+    /// the violations come back from the engine like any other copper. The
+    /// host writes them into the design with `export_traces_as_dsl`.
+    ///
+    /// Autorouted copper already on the board is cleared first. Returns an
+    /// empty string on success, or what went wrong.
+    pub fn load_ses(&mut self, ses: &str) -> String {
+        let nets: std::collections::HashMap<String, cypcb_world::NetId> = self
+            .world
+            .nets()
+            .map(|(id, name)| (name.to_string(), id))
+            .collect();
+        let result = match cypcb_router::import_ses_from_str(ses, &nets) {
+            Ok(result) => result,
+            Err(error) => return format!("The session file was not read: {error}"),
+        };
+        self.clear_autorouted_traces();
+        cypcb_router::apply_routes(&mut self.world, &result);
+        self.rebuild_spatial_index_full();
+        self.run_drc_internal();
+        String::new()
+    }
 }
 
 // Internal methods (not exposed to WASM)
 impl PcbEngine {
     /// The fab table this board is checked and routed against.
     ///
-    /// `board b { fab oshpark }` when the design names one, JLCPCB when it does
-    /// not. Four routing entry points and the checker used to reach for JLCPCB
-    /// by name, so the editor graded a board against a table the command line
-    /// had already stopped using - the same design, two answers, depending on
-    /// which of the two you opened it in.
+    /// `cypcb_drc::table_for_editor`, the choice `cypcb check` and the
+    /// language server read: the board's fab, JLCPCB when it names none, each
+    /// for the board's layer count. Four routing entry points and the checker
+    /// used to reach for JLCPCB by name, and after that for the two-layer table
+    /// of whatever the board named, so the editor graded a four-layer board
+    /// against a table the command line had already stopped using.
     ///
     /// A name this tool does not have falls back rather than failing: the
     /// editor has to keep drawing a board it cannot fully understand. The
     /// fallback is not silent - `load_source` reports the unknown name as a
     /// diagnostic on the line that wrote it.
     fn preset(&self) -> cypcb_rules::presets::RulesPreset {
-        self.world
-            .fab()
-            .and_then(cypcb_rules::presets::RulesPreset::from_name)
-            .unwrap_or(cypcb_rules::presets::RulesPreset::JlcpcbStandard2Layer)
+        cypcb_drc::table_for_editor(&self.world).0
     }
 
     /// Run DRC against the fab the board named.
@@ -1040,176 +1108,19 @@ impl PcbEngine {
         }
     }
 
-    /// Rebuild the spatial index including components, traces, and vias.
+    /// Rebuild the spatial index after an edit, with the builder the world
+    /// uses when a design is loaded.
+    ///
+    /// The checker reads parts from the index as their courtyards, with pad
+    /// copper looked up per part. A second builder here indexed pad entities
+    /// that a loaded design never spawns and parts on no layer, so after the
+    /// first trace was drawn two pads closer than the rule allows stopped
+    /// reading as too close.
     fn rebuild_spatial_index_full(&mut self) {
-        use cypcb_world::components::trace::{Trace as TraceComp, Via};
-        use cypcb_world::components::{FootprintRef, Position, Rotation};
-        use cypcb_world::SpatialEntry;
-        use std::collections::HashMap;
-
-        let mut entries = Vec::new();
-
-        // ---- Index individual pad entities ----
-        // Each pad was spawned as a separate entity with PadInstance + NetId + Position.
-        // We look up the footprint to get pad size/layer for the AABB.
-        {
-            let ecs = self.world.ecs_mut();
-            let mut query = ecs.query::<(Entity, &PadInstance, &Position)>();
-            let pad_entities: Vec<_> = query
-                .iter(ecs)
-                .map(|(e, pi, pos)| (e, pi.parent, pos.0))
-                .collect();
-
-            // Also need parent component's footprint to get pad sizes
-            let mut fp_query = ecs.query::<(Entity, &FootprintRef, &Position, &Rotation)>();
-            let comps: Vec<_> = fp_query
-                .iter(ecs)
-                .map(|(e, f, p, r)| (e, f.as_str().to_string(), p.0, r.0))
-                .collect();
-
-            // Build parent entity -> (footprint_name, comp_pos, rotation) map
-            let comp_map: HashMap<u32, (&str, Point, i32)> = comps
-                .iter()
-                .map(|(e, f, p, r)| (e.index(), (f.as_str(), *p, *r)))
-                .collect();
-
-            for (entity, parent, pad_pos) in &pad_entities {
-                // Find pad definition by matching position
-                if let Some(&(fp_name, _comp_pos, _rotation)) = comp_map.get(&parent.index()) {
-                    if let Some(fp) = self.footprint_lib.get(fp_name) {
-                        // Find the pad definition closest to this pad's position
-                        // (since pad entities store world position)
-                        let mut best_pad: Option<&cypcb_world::footprint::PadDef> = None;
-                        let mut best_dist = i64::MAX;
-
-                        let radians = (_rotation as f64 / 1000.0) * std::f64::consts::PI / 180.0;
-                        let cos_r = radians.cos();
-                        let sin_r = radians.sin();
-
-                        for pd in &fp.pads {
-                            let px = pd.position.x.0 as f64;
-                            let py = pd.position.y.0 as f64;
-                            let rx = (px * cos_r - py * sin_r) as i64;
-                            let ry = (px * sin_r + py * cos_r) as i64;
-                            let wx = _comp_pos.x.0 + rx;
-                            let wy = _comp_pos.y.0 + ry;
-                            let dist = (wx - pad_pos.x.0).abs() + (wy - pad_pos.y.0).abs();
-                            if dist < best_dist {
-                                best_dist = dist;
-                                best_pad = Some(pd);
-                            }
-                        }
-
-                        if let Some(pd) = best_pad {
-                            let hw = pd.size.0 .0 / 2; // half width
-                            let hh = pd.size.1 .0 / 2; // half height
-                                                       // Compute tight AABB for rotated rectangle.
-                                                       // |cos|*hw + |sin|*hh gives the axis-aligned half-extent.
-                            let abs_cos = cos_r.abs();
-                            let abs_sin = sin_r.abs();
-                            let half_x = (abs_cos * hw as f64 + abs_sin * hh as f64) as i64;
-                            let half_y = (abs_sin * hw as f64 + abs_cos * hh as f64) as i64;
-                            let layer_mask = if pd.layers.is_empty() {
-                                0xFFFFFFFF
-                            } else {
-                                pd.copper_mask()
-                            };
-                            entries.push(SpatialEntry::from_raw(
-                                *entity,
-                                pad_pos.x.0 - half_x,
-                                pad_pos.y.0 - half_y,
-                                pad_pos.x.0 + half_x,
-                                pad_pos.y.0 + half_y,
-                                layer_mask,
-                            ));
-                        }
-                    }
-                }
-            }
-        }
-
-        // ---- Also index component courtyards (for non-copper DRC like courtyard overlap) ----
-        {
-            let ecs = self.world.ecs_mut();
-            let mut query = ecs.query::<(Entity, &Position, &FootprintRef)>();
-            let items: Vec<_> = query
-                .iter(ecs)
-                .map(|(e, p, f)| (e, p.0, f.as_str().to_string()))
-                .collect();
-
-            // Skip courtyard indexing for copper clearance — pads are indexed above.
-            // We still keep courtyards for other DRC rules (courtyard clearance, etc.)
-            // but mark them with layer_mask = 0 so copper clearance check skips them.
-            for (entity, pos, footprint_name) in &items {
-                if let Some(fp) = self.footprint_lib.get(footprint_name) {
-                    let bounds = fp.courtyard;
-                    let min =
-                        Point::new(Nm(pos.x.0 + bounds.min.x.0), Nm(pos.y.0 + bounds.min.y.0));
-                    let max =
-                        Point::new(Nm(pos.x.0 + bounds.max.x.0), Nm(pos.y.0 + bounds.max.y.0));
-                    // layer_mask = 0 means this entry won't match any copper layer check
-                    entries.push(SpatialEntry::new(*entity, min, max, 0));
-                }
-            }
-        }
-
-        // ---- Index trace segments ----
-        {
-            let ecs = self.world.ecs_mut();
-            let mut query = ecs.query::<(Entity, &TraceComp)>();
-            let traces: Vec<_> = query
-                .iter(ecs)
-                .map(|(e, t)| {
-                    let segs: Vec<_> = t.segments.iter().map(|s| (s.start, s.end)).collect();
-                    (e, t.width.0, t.layer.to_copper_mask(), segs)
-                })
-                .collect();
-
-            for (entity, width, layer_mask, segs) in &traces {
-                let half_width = width / 2;
-                for (start, end) in segs {
-                    let min_x = start.x.0.min(end.x.0) - half_width;
-                    let min_y = start.y.0.min(end.y.0) - half_width;
-                    let max_x = start.x.0.max(end.x.0) + half_width;
-                    let max_y = start.y.0.max(end.y.0) + half_width;
-                    entries.push(SpatialEntry::from_raw(
-                        *entity,
-                        min_x,
-                        min_y,
-                        max_x,
-                        max_y,
-                        *layer_mask,
-                    ));
-                }
-            }
-        }
-
-        // ---- Index vias ----
-        {
-            let ecs = self.world.ecs_mut();
-            let mut query = ecs.query::<(Entity, &Via)>();
-            let vias: Vec<_> = query
-                .iter(ecs)
-                .map(|(e, v)| (e, v.position, v.outer_diameter.0 / 2, v.copper_mask()))
-                .collect();
-
-            for (entity, position, radius, layer_mask) in &vias {
-                entries.push(SpatialEntry::from_raw(
-                    *entity,
-                    position.x.0 - radius,
-                    position.y.0 - radius,
-                    position.x.0 + radius,
-                    position.y.0 + radius,
-                    *layer_mask,
-                ));
-            }
-        }
-
         self.world
-            .ecs_mut()
-            .resource_mut::<cypcb_world::SpatialIndex>()
-            .rebuild(entries);
+            .rebuild_spatial_index_from_library(&self.footprint_lib);
     }
+
     /// Clear autorouted traces and vias from the world.
     fn clear_autorouted_traces(&mut self) {
         use cypcb_world::components::trace::{RouterPlaced, Trace, TraceSource, Via};
@@ -1462,25 +1373,17 @@ impl PcbEngine {
             // clearance checker can do precise same-net exemption per pad, not per
             // component (which would incorrectly exempt all nets on the component).
             if let Some(fp) = self.footprint_lib.get(&comp.footprint) {
-                let radians = (comp.rotation_mdeg as f64 / 1000.0) * std::f64::consts::PI / 180.0;
-                let cos_r = radians.cos();
-                let sin_r = radians.sin();
-
                 for pad_def in &fp.pads {
                     // Look up which net this specific pad is on
                     let pad_key = format!("{}.{}", comp.refdes, pad_def.number);
                     if let Some(&net_id) = pin_to_net.get(&pad_key) {
-                        // Compute world position (rotate pad around component origin)
-                        let px = pad_def.position.x.0 as f64;
-                        let py = pad_def.position.y.0 as f64;
-                        let rx = (px * cos_r - py * sin_r) as i64;
-                        let ry = (px * sin_r + py * cos_r) as i64;
-                        let wx = comp.x_nm + rx;
-                        let wy = comp.y_nm + ry;
-
                         // Spawn pad entity with NetId for per-pad DRC
                         let pad_marker = PadInstance::new(comp_entity);
-                        let pad_pos = Position(Point::new(Nm(wx), Nm(wy)));
+                        let pad_pos = Position(cypcb_world::components::place_pad(
+                            Point::new(Nm(comp.x_nm), Nm(comp.y_nm)),
+                            pad_def.position,
+                            rotation,
+                        ));
                         self.world.spawn_entity((pad_marker, net_id, pad_pos));
                     }
                 }
@@ -1521,46 +1424,7 @@ impl PcbEngine {
     ) -> cypcb_world::footprint::Footprint {
         use cypcb_world::footprint::{Footprint, PadDef};
 
-        let mut pad_defs: Vec<PadDef> = Vec::with_capacity(pads.len());
-
-        for pad in pads {
-            // Convert shape string to PadShape
-            let shape = match pad.shape.as_str() {
-                "circle" => PadShape::Circle,
-                "roundrect" => PadShape::RoundRect { corner_ratio: 25 },
-                "oblong" => PadShape::Oblong,
-                _ => PadShape::Rect, // default to rect
-            };
-
-            // Convert layer_mask to Vec<Layer>
-            let mut layers: Vec<Layer> = Vec::new();
-            if pad.layer_mask & 1 != 0 {
-                layers.push(Layer::TopCopper);
-            }
-            if pad.layer_mask & 2 != 0 {
-                layers.push(Layer::BottomCopper);
-            }
-            for i in 0..30 {
-                if pad.layer_mask & (1 << (2 + i)) != 0 {
-                    layers.push(Layer::Inner(i));
-                }
-            }
-            // If no layers specified, default to top copper
-            if layers.is_empty() {
-                layers.push(Layer::TopCopper);
-            }
-
-            pad_defs.push(PadDef {
-                number: pad.number.clone(),
-                shape,
-                position: Point::new(Nm(pad.x_nm), Nm(pad.y_nm)),
-                size: (Nm(pad.width_nm), Nm(pad.height_nm)),
-                drill: pad.drill_nm.map(Nm),
-                slot: pad.slot_nm.map(|(w, h)| (Nm(w), Nm(h))),
-                layers,
-                mask_margin: None,
-            });
-        }
+        let pad_defs: Vec<PadDef> = pads.iter().map(PadInfo::to_pad_def).collect();
 
         // Calculate bounds from pads
         let mut min_x = i64::MAX;
@@ -1569,8 +1433,10 @@ impl PcbEngine {
         let mut max_y = i64::MIN;
 
         for pad in &pad_defs {
-            let half_w = pad.size.0 .0 / 2;
-            let half_h = pad.size.1 .0 / 2;
+            // Its sides along the footprint's axes, once its own turn is taken up.
+            let (width, height) = pad.outline(Point::ORIGIN, Rotation::ZERO).size;
+            let half_w = width.0 / 2;
+            let half_h = height.0 / 2;
             min_x = min_x.min(pad.position.x.0 - half_w);
             min_y = min_y.min(pad.position.y.0 - half_h);
             max_x = max_x.max(pad.position.x.0 + half_w);
@@ -1677,16 +1543,23 @@ impl PcbEngine {
                 for pad in &fp.pads {
                     let layer_mask: u32 = pad.copper_mask();
                     let drill_nm: Option<i64> = pad.drill.map(|d| d.0);
+                    // The viewer turns a pad with its part only, so it is
+                    // handed the pad's sides - and its slot's - along the
+                    // footprint's axes, its own turn already taken up.
+                    let (width, height) = pad.outline(Point::ORIGIN, Rotation::ZERO).size;
+                    let stood_up = width != pad.size.0 || height != pad.size.1;
                     pads.push(PadInfo {
                         number: pad.number.clone(),
                         x_nm: pad.position.x.0,
                         y_nm: pad.position.y.0,
-                        width_nm: pad.size.0 .0,
-                        height_nm: pad.size.1 .0,
+                        width_nm: width.0,
+                        height_nm: height.0,
                         shape: pad_shape_to_string(&pad.shape),
                         layer_mask,
                         drill_nm,
-                        slot_nm: pad.slot.map(|(w, h)| (w.0, h.0)),
+                        slot_nm: pad
+                            .slot
+                            .map(|(w, h)| if stood_up { (h.0, w.0) } else { (w.0, h.0) }),
                     });
                 }
             }
@@ -1903,7 +1776,7 @@ impl PcbEngine {
         let vias = self.collect_vias();
 
         // Build ratsnest info (unrouted connections)
-        let ratsnest = self.collect_ratsnest(&nets);
+        let ratsnest = self.collect_ratsnest();
 
         // Build the copper the pours actually become
         let pours = self.collect_pours();
@@ -2150,99 +2023,80 @@ impl PcbEngine {
         vias
     }
 
-    /// Calculate ratsnest (unrouted connections).
+    /// The ratsnest: one line for each connection the copper still lacks.
     ///
-    /// For each net with multiple pins, if there are no traces connecting
-    /// all pins, we show ratsnest lines between unconnected pin pairs.
+    /// The pieces come from [`cypcb_drc::rules::copper_pieces`], the function
+    /// `check` reports `net-split` from and the router routes between, so a
+    /// pad joined by a hand-drawn trace draws no line and a pad nothing
+    /// reaches draws one. This used to skip every net with a trace on it: a
+    /// net wired by hand from R1 to C1 showed no line to R2, which `check`
+    /// still reported unrouted.
     ///
-    /// Simple algorithm: For nets with pins but no traces, show lines
-    /// from first pin to all other pins (star topology for visualization).
-    fn collect_ratsnest(&mut self, nets: &[NetInfo]) -> Vec<RatsnestInfo> {
-        use std::collections::HashMap;
-
+    /// The pieces of a net that hold a pad are joined by a shortest spanning
+    /// tree over the nearest pads of each two pieces: one line fewer than
+    /// there are pieces.
+    fn collect_ratsnest(&mut self) -> Vec<RatsnestInfo> {
         let mut ratsnest: Vec<RatsnestInfo> = Vec::new();
-
-        // Get trace count per net to determine if net is routed
-        let mut traces_per_net: HashMap<String, usize> = HashMap::new();
-        for trace in self.collect_traces() {
-            *traces_per_net.entry(trace.net_name.clone()).or_insert(0) += 1;
-        }
-
-        // For each net with connections
-        for net in nets {
-            if net.connections.len() < 2 {
-                continue; // Need at least 2 pins to show ratsnest
-            }
-
-            // If net has traces, assume it's at least partially routed
-            // (A full ratsnest would check actual connectivity, but this is MVP)
-            if traces_per_net.contains_key(&net.name) {
-                continue;
-            }
-
-            // Get pin positions
-            let mut pin_positions: Vec<(f64, f64)> = Vec::new();
-
-            for conn in &net.connections {
-                // Find the component
-                if let Some(entity) = self.world.find_by_refdes(&conn.component) {
-                    if let Some(pos) = self.world.get::<Position>(entity) {
-                        // Get the pad offset from footprint
-                        let footprint_name = self
-                            .world
-                            .get::<FootprintRef>(entity)
-                            .map(|f| f.as_str().to_string())
-                            .unwrap_or_default();
-
-                        let pad_offset = self.get_pad_offset(&footprint_name, &conn.pin);
-                        let rotation = self.world.get::<Rotation>(entity).map(|r| r.0).unwrap_or(0);
-
-                        // Apply rotation to pad offset
-                        let radians = (rotation as f64 / 1000.0) * (std::f64::consts::PI / 180.0);
-                        let cos = radians.cos();
-                        let sin = radians.sin();
-
-                        let rotated_x = pad_offset.0 * cos - pad_offset.1 * sin;
-                        let rotated_y = pad_offset.0 * sin + pad_offset.1 * cos;
-
-                        let pin_x = pos.0.x.0 as f64 + rotated_x;
-                        let pin_y = pos.0.y.0 as f64 + rotated_y;
-
-                        pin_positions.push((pin_x, pin_y));
-                    }
-                }
-            }
-
-            // Create star-topology ratsnest from first pin to all others
-            if pin_positions.len() >= 2 {
-                let (first_x, first_y) = pin_positions[0];
-                for (x, y) in pin_positions.iter().skip(1) {
-                    ratsnest.push(RatsnestInfo {
-                        start_x: first_x,
-                        start_y: first_y,
-                        end_x: *x,
-                        end_y: *y,
-                        net_name: net.name.clone(),
-                    });
-                }
+        for net in cypcb_drc::rules::copper_pieces(&mut self.world) {
+            let pieces: Vec<Vec<Point>> = net
+                .pieces_with_pads()
+                .map(|piece| piece.pins.iter().map(|pin| pin.at).collect())
+                .collect();
+            for (from, to) in spanning_links(&pieces) {
+                ratsnest.push(RatsnestInfo {
+                    start_x: from.x.0 as f64,
+                    start_y: from.y.0 as f64,
+                    end_x: to.x.0 as f64,
+                    end_y: to.y.0 as f64,
+                    net_name: net.name.clone(),
+                });
             }
         }
-
         ratsnest
     }
+}
 
-    /// Get pad offset from component origin for a given footprint and pin.
-    fn get_pad_offset(&self, footprint_name: &str, pin: &str) -> (f64, f64) {
-        if let Some(fp) = self.footprint_lib.get(footprint_name) {
-            for pad in &fp.pads {
-                if pad.number == pin {
-                    return (pad.position.x.0 as f64, pad.position.y.0 as f64);
+/// The shortest links that join every piece into one: Prim's tree over the
+/// pieces, each link between the nearest two pads of the pieces it joins.
+/// One fewer link than pieces.
+fn spanning_links(pieces: &[Vec<Point>]) -> Vec<(Point, Point)> {
+    let nearest = |a: &[Point], b: &[Point]| -> (i128, Point, Point) {
+        let mut best = (i128::MAX, Point::ORIGIN, Point::ORIGIN);
+        for &p in a {
+            for &q in b {
+                let (dx, dy) = ((p.x.0 - q.x.0) as i128, (p.y.0 - q.y.0) as i128);
+                let d = dx * dx + dy * dy;
+                if d < best.0 {
+                    best = (d, p, q);
                 }
             }
         }
-        // Default to origin if pad not found
-        (0.0, 0.0)
+        best
+    };
+    let mut links = Vec::new();
+    if pieces.len() < 2 {
+        return links;
     }
+    let mut joined = vec![false; pieces.len()];
+    joined[0] = true;
+    for _ in 1..pieces.len() {
+        let mut best: Option<(i128, Point, Point, usize)> = None;
+        for (i, inside) in pieces.iter().enumerate() {
+            for (j, outside) in pieces.iter().enumerate() {
+                if !joined[i] || joined[j] {
+                    continue;
+                }
+                let (d, p, q) = nearest(inside, outside);
+                if best.is_none_or(|(bd, ..)| d < bd) {
+                    best = Some((d, p, q, j));
+                }
+            }
+        }
+        let Some((_, p, q, j)) = best else { break };
+        joined[j] = true;
+        links.push((p, q));
+    }
+    links
 }
 
 impl Default for PcbEngine {
@@ -2448,7 +2302,11 @@ mod tests {
         let source = "version 1\n\n\
                       board b {\n    size 30mm x 20mm\n    layers 2\n    fab jlpcb\n}\n";
         let mut engine = PcbEngine::new();
-        engine.load_source(source);
+        let loaded = engine.load_source(source);
+        assert!(
+            loaded.is_empty(),
+            "the board in this test does not load: {loaded}"
+        );
 
         let diagnostics = engine.get_diagnostics_json();
         assert!(
@@ -2719,7 +2577,8 @@ mod tests {
         let silk = r#"[
             {"type":"segment","x1":-500000,"y1":0,"x2":500000,"y2":0,"width":150000},
             {"type":"circle","cx":0,"cy":600000,"radius":100000,"width":150000},
-            {"type":"arc","cx":0,"cy":0,"radius":100000,"width":150000}
+            {"type":"arc","cx":0,"cy":0,"radius":100000,"width":150000,
+             "startAngle":0.0,"endAngle":0.0}
         ]"#;
 
         let mut engine = PcbEngine::new();
@@ -2734,7 +2593,7 @@ mod tests {
 
         // The segment and the circle survive as themselves. The arc has no
         // shape in the model, so it arrives as ink: 32 segments to the turn,
-        // and this one states no angles, which means all the way round.
+        // and this one ends where it starts, which means all the way round.
         assert_eq!(
             stored.len(),
             2 + 32,
@@ -2965,11 +2824,15 @@ mod tests {
     #[test]
     fn test_trace_add_returns_valid_id() {
         let mut engine = PcbEngine::new();
-        engine.load_source(
+        let loaded = engine.load_source(
             r#"
             version 1
             board test { size 50mm x 30mm layers 2 }
             "#,
+        );
+        assert!(
+            loaded.is_empty(),
+            "the board in this test does not load: {loaded}"
         );
 
         // Add a horizontal trace: (5mm,5mm) → (20mm,5mm)
@@ -2982,11 +2845,15 @@ mod tests {
     #[test]
     fn test_trace_add_multiple() {
         let mut engine = PcbEngine::new();
-        engine.load_source(
+        let loaded = engine.load_source(
             r#"
             version 1
             board test { size 50mm x 30mm layers 2 }
             "#,
+        );
+        assert!(
+            loaded.is_empty(),
+            "the board in this test does not load: {loaded}"
         );
 
         let seg1 = [5_000_000i64, 5_000_000, 20_000_000, 5_000_000];
@@ -3001,11 +2868,15 @@ mod tests {
     #[test]
     fn test_trace_add_appears_in_snapshot() {
         let mut engine = PcbEngine::new();
-        engine.load_source(
+        let loaded = engine.load_source(
             r#"
             version 1
             board test { size 50mm x 30mm layers 2 }
             "#,
+        );
+        assert!(
+            loaded.is_empty(),
+            "the board in this test does not load: {loaded}"
         );
 
         let segments = [5_000_000i64, 5_000_000, 20_000_000, 5_000_000];
@@ -3023,11 +2894,15 @@ mod tests {
     #[test]
     fn test_trace_remove() {
         let mut engine = PcbEngine::new();
-        engine.load_source(
+        let loaded = engine.load_source(
             r#"
             version 1
             board test { size 50mm x 30mm layers 2 }
             "#,
+        );
+        assert!(
+            loaded.is_empty(),
+            "the board in this test does not load: {loaded}"
         );
 
         let segments = [5_000_000i64, 5_000_000, 20_000_000, 5_000_000];
@@ -3059,11 +2934,15 @@ mod tests {
     #[test]
     fn test_trace_get_at_point_hit() {
         let mut engine = PcbEngine::new();
-        engine.load_source(
+        let loaded = engine.load_source(
             r#"
             version 1
             board test { size 50mm x 30mm layers 2 }
             "#,
+        );
+        assert!(
+            loaded.is_empty(),
+            "the board in this test does not load: {loaded}"
         );
 
         // Horizontal trace from (5mm,10mm) to (25mm,10mm), 0.2mm wide
@@ -3078,11 +2957,15 @@ mod tests {
     #[test]
     fn test_trace_get_at_point_near() {
         let mut engine = PcbEngine::new();
-        engine.load_source(
+        let loaded = engine.load_source(
             r#"
             version 1
             board test { size 50mm x 30mm layers 2 }
             "#,
+        );
+        assert!(
+            loaded.is_empty(),
+            "the board in this test does not load: {loaded}"
         );
 
         // Horizontal trace at y=10mm, 0.2mm wide (so copper extends 0.1mm above/below)
@@ -3097,11 +2980,15 @@ mod tests {
     #[test]
     fn test_trace_get_at_point_miss() {
         let mut engine = PcbEngine::new();
-        engine.load_source(
+        let loaded = engine.load_source(
             r#"
             version 1
             board test { size 50mm x 30mm layers 2 }
             "#,
+        );
+        assert!(
+            loaded.is_empty(),
+            "the board in this test does not load: {loaded}"
         );
 
         let segments = [5_000_000i64, 10_000_000, 25_000_000, 10_000_000];
@@ -3115,11 +3002,15 @@ mod tests {
     #[test]
     fn test_trace_add_remove_add_cycle() {
         let mut engine = PcbEngine::new();
-        engine.load_source(
+        let loaded = engine.load_source(
             r#"
             version 1
             board test { size 50mm x 30mm layers 2 }
             "#,
+        );
+        assert!(
+            loaded.is_empty(),
+            "the board in this test does not load: {loaded}"
         );
 
         // Add → remove → add again
@@ -3164,11 +3055,15 @@ mod tests {
     #[test]
     fn test_trace_multi_segment() {
         let mut engine = PcbEngine::new();
-        engine.load_source(
+        let loaded = engine.load_source(
             r#"
             version 1
             board test { size 50mm x 30mm layers 2 }
             "#,
+        );
+        assert!(
+            loaded.is_empty(),
+            "the board in this test does not load: {loaded}"
         );
 
         // L-shaped trace: (5mm,5mm)→(15mm,5mm)→(15mm,15mm)
@@ -3201,11 +3096,15 @@ mod tests {
     #[test]
     fn test_run_drc_incremental() {
         let mut engine = PcbEngine::new();
-        engine.load_source(
+        let loaded = engine.load_source(
             r#"
             version 1
             board test { size 50mm x 30mm layers 2 }
             "#,
+        );
+        assert!(
+            loaded.is_empty(),
+            "the board in this test does not load: {loaded}"
         );
 
         let count = engine.run_drc_incremental();
@@ -3216,7 +3115,7 @@ mod tests {
     #[test]
     fn test_component_body_dimensions_from_footprint() {
         let mut engine = PcbEngine::new();
-        engine.load_source(
+        let loaded = engine.load_source(
             r#"
             version 1
             board test { size 50mm x 30mm layers 2 }
@@ -3225,6 +3124,10 @@ mod tests {
                 at 10mm, 10mm
             }
             "#,
+        );
+        assert!(
+            loaded.is_empty(),
+            "the board in this test does not load: {loaded}"
         );
 
         let snapshot = engine.build_snapshot();
@@ -3292,7 +3195,12 @@ mod tests {
     #[test]
     fn test_export_traces_empty() {
         let mut engine = PcbEngine::new();
-        engine.load_source("version 1\nboard t { size 50mm x 30mm; layers 2 }");
+        let loaded =
+            engine.load_source("version 1\nboard t {\n    size 50mm x 30mm\n    layers 2\n}");
+        assert!(
+            loaded.is_empty(),
+            "the board in this test does not load: {loaded}"
+        );
         let dsl = engine.export_traces_as_dsl();
         assert!(dsl.is_empty(), "Expected empty export, got: {}", dsl);
     }
@@ -3300,7 +3208,13 @@ mod tests {
     #[test]
     fn test_export_traces_basic() {
         let mut engine = PcbEngine::new();
-        engine.load_source("version 1\nboard t { size 50mm x 30mm; layers 2 }\nnet VCC { }");
+        let loaded = engine.load_source(
+            "version 1\nboard t {\n    size 50mm x 30mm\n    layers 2\n}\nnet VCC { }",
+        );
+        assert!(
+            loaded.is_empty(),
+            "the board in this test does not load: {loaded}"
+        );
 
         // Add a trace manually via the API
         let segments = [
@@ -3337,8 +3251,12 @@ mod tests {
     fn test_trace_round_trip_determinism() {
         // Phase 1: create engine, add traces, export to DSL
         let mut engine1 = PcbEngine::new();
-        engine1.load_source(
+        let loaded = engine1.load_source(
             "version 1\nboard t { size 60mm x 40mm\nlayers 2 }\nnet VCC { }\nnet GND { }",
+        );
+        assert!(
+            loaded.is_empty(),
+            "the board in this test does not load: {loaded}"
         );
 
         // Add traces with various coordinate values (including tricky float cases)
@@ -3397,8 +3315,12 @@ mod tests {
     #[test]
     fn test_export_traces_locked() {
         let mut engine = PcbEngine::new();
-        engine.load_source(
-            "version 1\nboard t { size 50mm x 30mm; layers 2 }\nnet VCC { }\ntrace VCC {\n    layer Top\n    width 0.25mm\n    path 5mm,10mm -> 15mm,10mm\n    locked\n}",
+        let loaded = engine.load_source(
+            "version 1\nboard t {\n    size 50mm x 30mm\n    layers 2\n}\nnet VCC { }\ntrace VCC {\n    layer Top\n    width 0.25mm\n    path 5mm,10mm -> 15mm,10mm\n    locked\n}",
+        );
+        assert!(
+            loaded.is_empty(),
+            "the board in this test does not load: {loaded}"
         );
 
         let dsl = engine.export_traces_as_dsl();
@@ -3408,7 +3330,13 @@ mod tests {
     #[test]
     fn test_export_traces_multi_layer() {
         let mut engine = PcbEngine::new();
-        engine.load_source("version 1\nboard t { size 50mm x 30mm; layers 2 }\nnet SIG { }");
+        let loaded = engine.load_source(
+            "version 1\nboard t {\n    size 50mm x 30mm\n    layers 2\n}\nnet SIG { }",
+        );
+        assert!(
+            loaded.is_empty(),
+            "the board in this test does not load: {loaded}"
+        );
 
         // Add traces on both layers
         let seg_top = [5_000_000i64, 10_000_000, 15_000_000, 10_000_000];

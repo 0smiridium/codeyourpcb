@@ -310,6 +310,15 @@ fn an_interface_contract_is_checked_rather_than_stored() {
     // crate's own tests, where the module is missing a pin.
     let source = EVERYTHING;
     let parsed = cypcb_parser::parse(source);
+    assert!(
+        parsed.errors.is_empty(),
+        "the conformance board does not parse: {:?}",
+        parsed
+            .errors
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+    );
     let mut world = BoardWorld::new();
     let mut library = FootprintLibrary::new();
     let result = sync_ast_to_world(&parsed.value, source, &mut world, &mut library);

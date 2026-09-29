@@ -83,6 +83,7 @@ fn poured(clearance_mm: f64) -> String {
         &CoordinateFormat::FORMAT_MM_2_6,
         &options,
         None,
+        cypcb_export::stamp::Stamp::UNIX_EPOCH,
     )
     .expect("the layer exports")
 }
@@ -167,7 +168,7 @@ fn handed_off(clearance_mm: f64) -> String {
         &mut world,
         &library,
         cypcb_export::ipc2581::HouseTolerances::default(),
-        "2026-09-16T00:00:00+0000",
+        cypcb_export::stamp::Stamp::UNIX_EPOCH,
         &options,
     );
     document
@@ -219,20 +220,14 @@ fn no_shipping_path_pours_to_the_default() {
         .expect("the crate sits two levels below the repo root")
         .to_path_buf();
 
-    fn walk(dir: &std::path::Path, found: &mut Vec<(String, usize, String)>, with: &mut usize) {
-        let Ok(entries) = std::fs::read_dir(dir) else {
-            return;
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                if path.file_name().is_some_and(|name| name == "target") {
-                    continue;
-                }
-                walk(&path, found, with);
-                continue;
-            }
-            if path.extension().is_none_or(|e| e != "rs") {
+    fn walk(root: &std::path::Path, found: &mut Vec<(String, usize, String)>, with: &mut usize) {
+        for path in cypcb_fixtures::tree::tracked_under(root.join("crates")) {
+            let in_src = path
+                .strip_prefix(root)
+                .ok()
+                .and_then(|relative| relative.components().nth(2))
+                .is_some_and(|part| part.as_os_str() == "src");
+            if !in_src || path.extension().is_none_or(|e| e != "rs") {
                 continue;
             }
             let Ok(source) = std::fs::read_to_string(&path) else {
@@ -267,12 +262,7 @@ fn no_shipping_path_pours_to_the_default() {
 
     let mut calling_the_default = Vec::new();
     let mut calling_the_other = 0usize;
-    for crate_dir in std::fs::read_dir(root.join("crates")).expect("the crates are there") {
-        let src = crate_dir.expect("a crate").path().join("src");
-        if src.is_dir() {
-            walk(&src, &mut calling_the_default, &mut calling_the_other);
-        }
-    }
+    walk(&root, &mut calling_the_default, &mut calling_the_other);
 
     eprintln!(
         "shipping calls to the defaulting form: {}; to the one that takes the fab's figures: \

@@ -1,13 +1,12 @@
 //! Check command implementation.
 
 use clap::Args;
+use cypcb_world::in_build_order;
 use miette::{IntoDiagnostic, Result, WrapErr};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use cypcb_drc::{run_drc, Preset, PresetRules};
-use cypcb_world::footprint::FootprintLibrary;
-use cypcb_world::sync_ast_to_world;
 use cypcb_world::BoardWorld;
 
 /// Check a .cypcb file for errors.
@@ -91,46 +90,14 @@ impl CheckCommand {
             .into_diagnostic()
             .wrap_err_with(|| format!("Failed to read {}", self.file.display()))?;
 
-        let result = cypcb_parser::parse(&source);
-
-        // Report parse errors
-        if result.has_errors() {
-            // The file first, because the diagnostics under it do not carry a
-            // name: a person running this over a directory sees a column and a
-            // line and no way to tell which board they belong to.
-            eprintln!("{}: {} error(s)", self.file.display(), result.errors.len());
-            for err in result.errors {
-                eprintln!("{:?}", miette::Report::new(err));
-            }
+        // One reader for a design, shared with `cypcb route`, which reads the
+        // file it writes through this before it says what the checker will
+        // find in it. Its diagnostics are printed as it goes; an error here
+        // has nothing more to say.
+        let Ok(loaded) = crate::board_source::read_cypcb(&self.file, &source, true) else {
             std::process::exit(1);
-        }
-
-        let ast = result.value;
-
-        // Bring in whatever the file imports, resolved against its own
-        // directory. Errors are collected rather than fatal so the rest of the
-        // design is still checked.
-        let mut import_errors = Vec::new();
-        let ast = cypcb_parser::resolve_imports(&ast, &self.file, &mut import_errors);
-        for error in &import_errors {
-            eprintln!("Import error: {error}");
-        }
-
-        // Semantic validation: build the board model from the AST.
-        let mut world = BoardWorld::new();
-        let mut library = FootprintLibrary::new();
-        let sync_result = sync_ast_to_world(&ast, &source, &mut world, &mut library);
-
-        if !sync_result.errors.is_empty() {
-            for err in &sync_result.errors {
-                eprintln!("{:?}", miette::Report::new(err.clone()));
-            }
-            std::process::exit(1);
-        }
-
-        for warning in &sync_result.warnings {
-            eprintln!("{:?}", miette::Report::new(warning.clone()));
-        }
+        };
+        let world = loaded.world;
 
         self.check_board(world, &source)
     }
@@ -150,8 +117,7 @@ impl CheckCommand {
         if world.board_entity().is_none() {
             let parts = {
                 let ecs = world.ecs_mut();
-                let mut query = ecs.query::<&cypcb_world::components::RefDes>();
-                query.iter(ecs).count()
+                in_build_order::<&cypcb_world::components::RefDes>(ecs).len()
             };
             if parts > 0 {
                 return Err(miette::miette!(
@@ -290,6 +256,12 @@ impl CheckCommand {
         // contacts, and 24 rows for a single `U1 <-> trace 'GND'` on
         // `qfp_fanout`. A designer reading that sees one problem two dozen
         // times.
+        //
+        // Since 2026-09-26 the rule counts one row per place - one unbroken run
+        // of a trace too close to one pad, one via or one other net's trace -
+        // so a run along one pad is one row however many segments it takes. On
+        // the shipped benchmarks 319 rows for 152 contacts became 219 for the
+        // same 152. The grouping below still merges what is left per pair.
         //
         // **The counts do not change.** The header, the per-kind summary and
         // the shorts line are row counts and stay row counts, because every

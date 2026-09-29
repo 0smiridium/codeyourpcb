@@ -19,6 +19,15 @@ impl KiCadSource {
     ///
     /// If path is a .pretty folder, treats it as a single library.
     /// If path contains .pretty folders, treats each as a library.
+    /// The `<name>.pretty` folder of library `name`, from the first search
+    /// path that holds one.
+    pub fn library_folder(&self, name: &str) -> Option<PathBuf> {
+        self.search_paths
+            .iter()
+            .map(|search_path| search_path.join(format!("{}.pretty", name)))
+            .find(|candidate| candidate.is_dir())
+    }
+
     pub fn auto_organize_folder(path: &Path) -> Result<Vec<LibraryInfo>, LibraryError> {
         let mut libraries = Vec::new();
 
@@ -122,27 +131,19 @@ impl LibrarySource for KiCadSource {
 
     fn import_library(&self, name: &str) -> Result<Vec<Component>, LibraryError> {
         // Find the .pretty folder matching the name
-        let mut library_path: Option<PathBuf> = None;
-
-        for search_path in &self.search_paths {
-            let candidate = search_path.join(format!("{}.pretty", name));
-            if candidate.exists() && candidate.is_dir() {
-                library_path = Some(candidate);
-                break;
-            }
-        }
-
-        let library_path = library_path.ok_or_else(|| {
+        let library_path = self.library_folder(name).ok_or_else(|| {
             LibraryError::NotFound(format!("Library '{}' not found in search paths", name))
         })?;
 
-        // Read all .kicad_mod files in the directory
+        // Read all .kicad_mod files in the directory, in name order, so the
+        // file that wins a duplicate name is the same on every machine.
         let mut components = Vec::new();
+        let mut paths = fs::read_dir(&library_path)?
+            .map(|entry| entry.map(|entry| entry.path()))
+            .collect::<Result<Vec<_>, _>>()?;
+        paths.sort();
 
-        for entry in fs::read_dir(&library_path)? {
-            let entry = entry?;
-            let path = entry.path();
-
+        for path in paths {
             if path.is_file() {
                 if let Some(ext) = path.extension() {
                     if ext == "kicad_mod" {

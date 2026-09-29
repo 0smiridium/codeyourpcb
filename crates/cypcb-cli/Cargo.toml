@@ -38,3 +38,8 @@ cypcb-fixtures = { path = "../cypcb-fixtures" }
 # The engine the browser runs, so one test can ask both paths the same board
 # and compare what they found. The two have disagreed about row counts before.
 cypcb-render = { path = "../cypcb-render" }
+# The language server, so one test can ask it, the engine and `check` which
+# table a board is checked against. The three chose separately once.
+cypcb-lsp = { path = "../cypcb-lsp", default-features = false }
+# To read back the time an export stamps when `SOURCE_DATE_EPOCH` is unset.
+chrono = { workspace = true }

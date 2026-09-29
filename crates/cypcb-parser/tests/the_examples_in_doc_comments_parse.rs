@@ -25,26 +25,24 @@ fn repo_root() -> PathBuf {
 
 /// Every `.rs` file under `crates/*/src`.
 fn sources(root: &Path) -> Vec<PathBuf> {
-    let mut out = Vec::new();
-    let mut stack = vec![root.join("crates")];
-    while let Some(dir) = stack.pop() {
-        let Ok(entries) = fs::read_dir(&dir) else {
-            continue;
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                // `target` is build output and `tests` is held by its own
-                // suites; what is being read here is what ships as documentation.
-                let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-                if name != "target" && name != "tests" {
-                    stack.push(path);
-                }
-            } else if path.extension().is_some_and(|ext| ext == "rs") {
-                out.push(path);
-            }
-        }
-    }
+    let crates = root.join("crates");
+    let mut out: Vec<PathBuf> = cypcb_fixtures::tree::tracked_under(&crates)
+        .into_iter()
+        .filter(|path| path.extension().is_some_and(|ext| ext == "rs"))
+        .filter(|path| {
+            // `target` is build output and `tests` is held by its own
+            // suites; what is being read here is what ships as documentation.
+            let inside = path.strip_prefix(&crates).unwrap_or(path);
+            let dirs = inside
+                .parent()
+                .map(|dir| dir.components())
+                .into_iter()
+                .flatten();
+            !dirs
+                .map(|part| part.as_os_str())
+                .any(|name| name == "target" || name == "tests")
+        })
+        .collect();
     out.sort();
     out
 }

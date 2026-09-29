@@ -24,6 +24,7 @@
 //! with `unknown element in module: version`. The head is renamed on the way
 //! in; the fields are a gap in `cypcb-kicad` rather than here.
 
+pub mod design;
 pub mod error;
 pub mod manager;
 pub mod metadata;

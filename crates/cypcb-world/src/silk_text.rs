@@ -19,6 +19,7 @@
 //! the exporter printed designators the checker had never heard of. Both read
 //! [`designator_strokes`] now, so what is checked is what is printed.
 
+use crate::in_build_order;
 use cypcb_core::{Nm, Point};
 
 use crate::footprint::{Footprint, SilkShape};
@@ -71,13 +72,12 @@ pub fn pad_keepouts(
     layer: crate::Layer,
     margin: Nm,
 ) -> Vec<Keepout> {
-    use crate::components::{FootprintRef, Position, Rotation};
+    use crate::components::{place_pad, FootprintRef, Position, Rotation};
 
     let placed: Vec<(Point, String, f64)> = {
         let ecs = world.ecs_mut();
-        let mut query = ecs.query::<(&Position, &FootprintRef, &Rotation)>();
-        query
-            .iter(ecs)
+        in_build_order::<(&Position, &FootprintRef, &Rotation)>(ecs)
+            .into_iter()
             .map(|(position, footprint, rotation)| {
                 (position.0, footprint.0.clone(), rotation.to_degrees())
             })
@@ -89,18 +89,13 @@ pub fn pad_keepouts(
         let Some(footprint) = library.get(&footprint_name) else {
             continue;
         };
-        let (sin, cos) = rotation_deg.to_radians().sin_cos();
+        let rotation = Rotation::from_degrees(rotation_deg);
 
         for pad in &footprint.pads {
             if !pad.layers.contains(&layer) {
                 continue;
             }
-            let x = pad.position.x.raw() as f64;
-            let y = pad.position.y.raw() as f64;
-            let centre = Point::new(
-                Nm(position.x.raw() + (x * cos - y * sin).round() as i64),
-                Nm(position.y.raw() + (x * sin + y * cos).round() as i64),
-            );
+            let centre = place_pad(position, pad.position, rotation);
             let half_size = Nm(pad.size.0.raw().max(pad.size.1.raw()) / 2 + margin.raw());
             keepouts.push(Keepout { centre, half_size });
         }
@@ -339,9 +334,10 @@ pub const ARTWORK_GAP_STROKES: f32 = 2.0;
 /// Zero for a footprint that declares neither, which is how the library says
 /// "not known".
 pub fn artwork_rise(footprint: &Footprint, rotation_deg: f64) -> Nm {
-    let (sin, cos) = rotation_deg.to_radians().sin_cos();
     let rotated_y = |point: Point| -> i64 {
-        (point.x.raw() as f64 * sin + point.y.raw() as f64 * cos).round() as i64
+        crate::components::rotate_about_origin(point, rotation_deg)
+            .y
+            .raw()
     };
 
     let highest = if footprint.silk.is_empty() {

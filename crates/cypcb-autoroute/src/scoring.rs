@@ -54,8 +54,14 @@ pub struct RoutingScore {
     ///
     /// The clearance rule reports per pair of *segments*: two features that
     /// touch along a run report once for each segment that takes part, so one
-    /// contact can be two dozen rows. On the shipped benchmarks the ratio is
+    /// contact can be two dozen rows. On the shipped benchmarks the ratio was
     /// 759 rows to 484 contacts.
+    ///
+    /// Since 2026-09-26 the rule counts one row per place - one unbroken run of
+    /// a trace too close to one pad, one via or one other net's trace - so a
+    /// run along one pad is one row however many segments it takes. On the
+    /// shipped benchmarks 319 rows for 152 contacts became 219 for the same
+    /// 152.
     ///
     /// Published beside `drc_violations` rather than instead of it. The row
     /// count is the sensitive one and the ratchets are set against it; this is
@@ -1009,6 +1015,78 @@ mod tests {
             json.contains("\"composite\":42.5"),
             "JSON should contain composite"
         );
+    }
+
+    #[test]
+    fn crossings_over_a_turned_part_are_counted_the_same() {
+        // The crossing count asks the spatial index for nearby copper and
+        // keeps only traces, so a part in the index - turned or not - must
+        // not change it. Two traces on two nets cross over pad 2 of a bar
+        // whose pads are 6mm apart on a 7mm by 1mm courtyard.
+        use cypcb_core::Rect;
+        use cypcb_world::components::{
+            FootprintRef, NetConnections, PadShape, Position, RefDes, Rotation, Value,
+        };
+        use cypcb_world::footprint::{Footprint, PadDef};
+
+        let pad = |number: &str, x: f64| PadDef {
+            number: number.to_string(),
+            shape: PadShape::Rect,
+            position: Point::from_mm(x, 0.0),
+            size: (Nm::from_mm(0.6), Nm::from_mm(0.6)),
+            drill: None,
+            slot: None,
+            layers: vec![Layer::TopCopper],
+            mask_margin: None,
+            rotation: Rotation::ZERO,
+        };
+        let courtyard = Rect::from_center_size(Point::ORIGIN, (Nm::from_mm(7.0), Nm::from_mm(1.0)));
+        let mut library = FootprintLibrary::new();
+        library.register(Footprint {
+            name: "BAR".to_string(),
+            description: "two pads 6mm apart".to_string(),
+            pads: vec![pad("1", -3.0), pad("2", 3.0)],
+            bounds: courtyard,
+            courtyard,
+            silk: Vec::new(),
+        });
+
+        let mut counted = Vec::new();
+        for degrees in [0.0_f64, 90.0, 45.0] {
+            let mut world = BoardWorld::new();
+            world.set_board("t".to_string(), (Nm::from_mm(20.0), Nm::from_mm(20.0)), 2);
+            world.spawn_component(
+                RefDes::new("U1"),
+                Value::new("bar"),
+                Position::from_mm(10.0, 10.0),
+                Rotation::from_degrees(degrees),
+                FootprintRef::new("BAR"),
+                NetConnections::new(),
+            );
+            let (sin, cos) = degrees.to_radians().sin_cos();
+            let (x, y) = (10.0 + 3.0 * cos, 10.0 + 3.0 * sin);
+            for (net, from, to) in [
+                (1, Point::from_mm(x - 1.0, y), Point::from_mm(x + 1.0, y)),
+                (2, Point::from_mm(x, y - 1.0), Point::from_mm(x, y + 1.0)),
+            ] {
+                world.spawn_entity(Trace {
+                    segments: vec![TraceSegment::new(from, to)],
+                    width: Nm::from_mm(0.1),
+                    layer: Layer::TopCopper,
+                    net_id: NetId::new(net),
+                    locked: false,
+                    source: TraceSource::Manual,
+                });
+            }
+            world.rebuild_spatial_index_from_library(&library);
+            let score = score_board(
+                &mut world,
+                &DesignRules::default(),
+                &ScoreWeights::default(),
+            );
+            counted.push((degrees, score.crossings));
+        }
+        assert_eq!(counted, vec![(0.0, 1), (90.0, 1), (45.0, 1)]);
     }
 
     // ====================================================================

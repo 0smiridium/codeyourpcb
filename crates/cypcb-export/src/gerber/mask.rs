@@ -5,7 +5,7 @@
 
 use crate::apertures::{aperture_for_pad, ApertureManager, ApertureShape};
 use crate::coords::{nm_to_gerber, CoordinateFormat};
-use crate::gerber::copper::{place_pad_millideg, ExportError};
+use crate::gerber::copper::ExportError;
 use crate::gerber::header::{write_header, GerberFileFunction, Side};
 use cypcb_core::Nm;
 use cypcb_world::components::{FootprintRef, Position, Rotation};
@@ -89,7 +89,7 @@ impl MaskPasteConfig {
 /// let format = CoordinateFormat::FORMAT_MM_2_6;
 /// let config = MaskPasteConfig::default();
 ///
-/// let gerber = export_soldermask(&mut world, &library, Side::Top, &format, &config).unwrap();
+/// let gerber = export_soldermask(&mut world, &library, Side::Top, &format, &config, cypcb_export::stamp::Stamp::UNIX_EPOCH).unwrap();
 /// assert!(gerber.contains("TF.FileFunction,Soldermask,Top"));
 /// assert!(gerber.contains("M02*")); // End of file
 /// ```
@@ -99,6 +99,7 @@ pub fn export_soldermask(
     side: Side,
     format: &CoordinateFormat,
     config: &MaskPasteConfig,
+    stamp: crate::stamp::Stamp,
 ) -> Result<String, ExportError> {
     let mut output = String::new();
     let mut apertures = ApertureManager::new();
@@ -118,7 +119,13 @@ pub fn export_soldermask(
     let total_layers = world.board_info().map(|(_, ls)| ls.count).unwrap_or(2);
 
     // Write header
-    output.push_str(&write_header(&function, board_name, format, total_layers));
+    output.push_str(&write_header(
+        &function,
+        board_name,
+        format,
+        total_layers,
+        stamp,
+    ));
 
     // Collect drawing commands
     let mut drawing_commands = String::new();
@@ -182,7 +189,7 @@ pub fn export_soldermask(
 /// let format = CoordinateFormat::FORMAT_MM_2_6;
 /// let config = MaskPasteConfig::default();
 ///
-/// let gerber = export_solderpaste(&mut world, &library, Side::Top, &format, &config).unwrap();
+/// let gerber = export_solderpaste(&mut world, &library, Side::Top, &format, &config, cypcb_export::stamp::Stamp::UNIX_EPOCH).unwrap();
 /// assert!(gerber.contains("TF.FileFunction,Paste,Top"));
 /// assert!(gerber.contains("M02*")); // End of file
 /// ```
@@ -192,6 +199,7 @@ pub fn export_solderpaste(
     side: Side,
     format: &CoordinateFormat,
     config: &MaskPasteConfig,
+    stamp: crate::stamp::Stamp,
 ) -> Result<String, ExportError> {
     let mut output = String::new();
     let mut apertures = ApertureManager::new();
@@ -211,7 +219,13 @@ pub fn export_solderpaste(
     let total_layers = world.board_info().map(|(_, ls)| ls.count).unwrap_or(2);
 
     // Write header
-    output.push_str(&write_header(&function, board_name, format, total_layers));
+    output.push_str(&write_header(
+        &function,
+        board_name,
+        format,
+        total_layers,
+        stamp,
+    ));
 
     // Collect drawing commands
     let mut drawing_commands = String::new();
@@ -268,11 +282,11 @@ fn export_mask_openings(
                 continue;
             }
 
-            // Calculate absolute position (component position + rotated pad offset)
-            let abs_pos = place_pad_millideg(position.0, pad.position, rotation.0);
-
-            // Get base aperture shape for this pad
-            let base_shape = aperture_for_pad(pad);
+            // The pad turned with its part - where it lands and the aperture it
+            // is flashed with, from the one place a pad is turned.
+            let outline = pad.outline(position.0, *rotation);
+            let abs_pos = outline.centre;
+            let base_shape = aperture_for_pad(&outline);
 
             // How far the opening runs past the copper. The board's figure
             // comes from the fabricator's table and covers every pad on it;
@@ -331,11 +345,11 @@ fn export_paste_openings(
                 continue; // THT pad, skip
             }
 
-            // Calculate absolute position (component position + rotated pad offset)
-            let abs_pos = place_pad_millideg(position.0, pad.position, rotation.0);
-
-            // Get base aperture shape for this pad
-            let base_shape = aperture_for_pad(pad);
+            // The pad turned with its part - where it lands and the aperture it
+            // is flashed with, from the one place a pad is turned.
+            let outline = pad.outline(position.0, *rotation);
+            let abs_pos = outline.centre;
+            let base_shape = aperture_for_pad(&outline);
 
             // Apply paste reduction
             let reduced_shape = apply_reduction(base_shape, config.paste_reduction);
@@ -430,7 +444,14 @@ mod tests {
         let format = CoordinateFormat::FORMAT_MM_2_6;
         let config = MaskPasteConfig::default();
 
-        let result = export_soldermask(&mut world, &library, Side::Top, &format, &config);
+        let result = export_soldermask(
+            &mut world,
+            &library,
+            Side::Top,
+            &format,
+            &config,
+            crate::stamp::Stamp::UNIX_EPOCH,
+        );
         assert!(result.is_ok());
 
         let gerber = result.unwrap();
@@ -447,7 +468,14 @@ mod tests {
         let format = CoordinateFormat::FORMAT_MM_2_6;
         let config = MaskPasteConfig::default();
 
-        let result = export_solderpaste(&mut world, &library, Side::Top, &format, &config);
+        let result = export_solderpaste(
+            &mut world,
+            &library,
+            Side::Top,
+            &format,
+            &config,
+            crate::stamp::Stamp::UNIX_EPOCH,
+        );
         assert!(result.is_ok());
 
         let gerber = result.unwrap();
@@ -477,6 +505,7 @@ mod tests {
                 slot: None,
                 layers: vec![Layer::TopCopper],
                 mask_margin: None,
+                rotation: Rotation::ZERO,
             }],
         };
         library.register(footprint);
@@ -494,7 +523,14 @@ mod tests {
         let format = CoordinateFormat::FORMAT_MM_2_6;
         let config = MaskPasteConfig::default(); // 0.05mm expansion
 
-        let result = export_soldermask(&mut world, &library, Side::Top, &format, &config);
+        let result = export_soldermask(
+            &mut world,
+            &library,
+            Side::Top,
+            &format,
+            &config,
+            crate::stamp::Stamp::UNIX_EPOCH,
+        );
         assert!(result.is_ok());
 
         let gerber = result.unwrap();
@@ -526,6 +562,7 @@ mod tests {
                 slot: None,
                 layers: vec![Layer::TopCopper],
                 mask_margin: None,
+                rotation: Rotation::ZERO,
             }],
         };
         library.register(footprint);
@@ -543,7 +580,14 @@ mod tests {
         let format = CoordinateFormat::FORMAT_MM_2_6;
         let config = MaskPasteConfig::default();
 
-        let result = export_solderpaste(&mut world, &library, Side::Top, &format, &config);
+        let result = export_solderpaste(
+            &mut world,
+            &library,
+            Side::Top,
+            &format,
+            &config,
+            crate::stamp::Stamp::UNIX_EPOCH,
+        );
         assert!(result.is_ok());
 
         let gerber = result.unwrap();

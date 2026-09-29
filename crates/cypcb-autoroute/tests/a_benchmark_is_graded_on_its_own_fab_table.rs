@@ -72,8 +72,7 @@ fn no_new_harness_grades_a_benchmark_on_a_fixed_table() {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests");
 
     let mut found = Vec::new();
-    for entry in fs::read_dir(&dir).expect("the crate has a tests directory") {
-        let path = entry.expect("the directory entry reads").path();
+    for path in cypcb_fixtures::tree::tracked_in(&dir) {
         if path.extension().and_then(|e| e.to_str()) != Some("rs") {
             continue;
         }

@@ -37,7 +37,16 @@ fn load(example: &str) -> (BoardWorld, FootprintLibrary) {
     assert!(parsed.errors.is_empty(), "{example} parses");
     let mut world = BoardWorld::new();
     let mut library = FootprintLibrary::new();
-    let _ = sync_ast_to_world(&parsed.value, &source, &mut world, &mut library);
+    let synced = sync_ast_to_world(&parsed.value, &source, &mut world, &mut library);
+    assert!(
+        synced.errors.is_empty(),
+        "{example} does not load: {:?}",
+        synced
+            .errors
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+    );
     (world, library)
 }
 

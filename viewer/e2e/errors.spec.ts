@@ -35,6 +35,20 @@ test.describe('Error Display', () => {
     expect(hasSnapshot).toBe(true);
   });
 
+  // The count means nothing without the table it was measured against. A
+  // four-layer board was checked here against the two-layer table while
+  // `cypcb check` used the four-layer one, and the screen did not say which.
+  test('the status names the fab table the board is checked against', async ({ page }) => {
+    const board = (layers: number, fab: string) =>
+      `version 1\nboard t {\n  size 50mm x 50mm\n  layers ${layers}\n${fab}}`;
+
+    await page.evaluate((src) => (window as any).__loadBoard(src), board(4, ''));
+    await expect(page.locator('#drc-table')).toHaveText('DRC against jlcpcb_standard_4layer');
+
+    await page.evaluate((src) => (window as any).__loadBoard(src), board(2, '  fab oshpark\n'));
+    await expect(page.locator('#drc-table')).toHaveText('DRC against oshpark_2layer');
+  });
+
   test('DRC violations show error badge', async ({ page }) => {
     // Open editor and input DRC-triggering code
     await page.click('#editor-toggle');
@@ -146,20 +160,20 @@ test.describe('Error Display', () => {
     await expect(page.locator('#error-panel')).toBeVisible();
 
     // One item per contact, though the rule reports more rows than that.
-    // Measured in the browser on this board: 6 rows describing 3 contacts.
-    // The command line counts 4 rows for the same 3 contacts - the two DRC
-    // paths group identically and count rows differently, which is worth
-    // knowing and is not what this test is about. It read 2 and 1 until
-    // 2026-08-24, when a trace stating a via stopped losing its copper - the
-    // board had been two holes with nothing joining them, so only the vias
-    // could touch anything.
+    // Measured in the browser on this board: 5 rows describing 3 contacts, and
+    // the command line counts the same 5. It read 2 and 1 until 2026-08-24,
+    // when a trace stating a via stopped losing its copper - the board had
+    // been two holes with nothing joining them, so only the vias could touch
+    // anything. It read 6 here and 4 on the command line until 2026-09-26,
+    // when the clearance rule started counting one row per place rather than
+    // per pair of trace entities: SIG across R3 is one row per pad it crosses.
     await expect(
       page.locator('#error-list .error-item').filter({ hasText: 'Copper clearance' }),
     ).toHaveCount(3);
 
     // And the panel says so, rather than quietly dropping a row.
     await expect(page.locator('#error-panel')).toContainText(
-      '6 clearance rows describe 3 contacts',
+      '5 clearance rows describe 3 contacts',
     );
     await expect(page.locator('#error-panel')).toContainText(
       'and 1 more place where the same two touch',

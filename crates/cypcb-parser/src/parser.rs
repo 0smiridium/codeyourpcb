@@ -1083,6 +1083,7 @@ impl CypcbParser {
         let mut description: Option<String> = None;
         let mut pads: Vec<PadDef> = Vec::new();
         let mut courtyard: Option<(Dimension, Dimension)> = None;
+        let mut courtyard_centre: Option<(Dimension, Dimension)> = None;
         let mut silk: Vec<SilkDef> = Vec::new();
 
         let mut cursor = node.walk();
@@ -1116,6 +1117,12 @@ impl CypcbParser {
                         if let (Some(w), Some(h)) = (width, height) {
                             courtyard = Some((w, h));
                         }
+                        // `at X, Y`, the same field the hand reader takes.
+                        let x = get_child_by_field(&prop, "x")
+                            .and_then(|n| self.convert_dimension(source, &n, errors));
+                        let y = get_child_by_field(&prop, "y")
+                            .and_then(|n| self.convert_dimension(source, &n, errors));
+                        courtyard_centre = x.zip(y);
                     }
                     "silk_line" => {
                         let dim = |field: &str, errors: &mut Vec<ParseError>| {
@@ -1164,6 +1171,7 @@ impl CypcbParser {
             description,
             pads,
             courtyard,
+            courtyard_centre,
             silk,
             span: span_of(node),
         })
@@ -1242,6 +1250,11 @@ impl CypcbParser {
             None => None,
         };
 
+        // `rotate 90`, the same field the hand reader takes: the pad's turn
+        // inside its footprint.
+        let rotation = get_child_by_field(node, "rotation")
+            .and_then(|n| self.convert_rotation(source, &n, errors));
+
         Some(PadDef {
             number,
             shape,
@@ -1253,6 +1266,7 @@ impl CypcbParser {
             drill_height,
             corner_ratio,
             mask_margin,
+            rotation,
             span: span_of(node),
         })
     }
@@ -2557,6 +2571,15 @@ board test {
 }
 "#;
         let result = parse(source);
+        assert!(
+            result.errors.is_empty(),
+            "the board in this test does not parse: {:?}",
+            result
+                .errors
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+        );
         // Unitless dimensions default to mm
         if let Definition::Board(board) = &result.value.definitions[0] {
             let size = board.size.as_ref().expect("size should be present");
@@ -2947,6 +2970,32 @@ footprint ROUNDED {
             // A pad that states none carries none, and the 25% a board is
             // drawn with is decided where the design becomes a board.
             assert_eq!(fp.pads[1].corner_ratio, None);
+        } else {
+            panic!("expected footprint definition");
+        }
+    }
+
+    /// A pad's turn inside its footprint, through the tree-sitter reader.
+    #[test]
+    fn a_pad_states_its_turn_in_its_footprint() {
+        let source = r#"
+footprint HEADER {
+    pad 1 oblong at 0mm, 0mm rotate 90 size 1.524mm x 3.048mm drill 1mm
+    pad 2 oblong at 2.54mm, 0mm size 1.524mm x 3.048mm drill 1mm
+}
+"#;
+        let result = parse(source);
+        assert!(result.is_ok(), "errors: {:?}", result.errors);
+
+        if let Definition::Footprint(fp) = &result.value.definitions[0] {
+            let turn = fp.pads[0]
+                .rotation
+                .as_ref()
+                .expect("the first pad states a turn");
+            assert!((turn.angle - 90.0).abs() < 1e-9);
+            // The size stays the pad's own, before the turn.
+            assert!((fp.pads[0].width.value - 1.524).abs() < 1e-9);
+            assert!(fp.pads[1].rotation.is_none());
         } else {
             panic!("expected footprint definition");
         }
@@ -3692,9 +3741,7 @@ assert R1.value within 10kohm +/- 5%
             .join("examples");
 
         let mut files_tested = 0;
-        for entry in std::fs::read_dir(&examples_dir).expect("examples dir should exist") {
-            let entry = entry.unwrap();
-            let path = entry.path();
+        for path in cypcb_fixtures::tree::tracked_in(&examples_dir) {
             if path.extension().is_some_and(|ext| ext == "cypcb") {
                 let filename = path.file_name().unwrap().to_string_lossy().to_string();
                 let source = std::fs::read_to_string(&path)

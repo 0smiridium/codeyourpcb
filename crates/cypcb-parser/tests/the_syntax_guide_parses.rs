@@ -154,8 +154,7 @@ fn every_top_level_example_in_the_other_documents_parses() {
     let mut seen = 0usize;
     let mut text = 0usize;
     let mut checked = 0usize;
-    for entry in std::fs::read_dir(repo_root().join("docs")).expect("docs is in the repo") {
-        let path = entry.expect("a directory entry").path();
+    for path in cypcb_fixtures::tree::tracked_in(repo_root().join("docs")) {
         let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
         if !name.ends_with(".md") || name == "SYNTAX.md" || name == "TRACKER.md" {
             continue;

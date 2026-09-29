@@ -201,7 +201,7 @@ impl ExportCommand {
         // Build world from AST
         eprintln!("Building board model...");
         let mut world = BoardWorld::new();
-        let mut library = FootprintLibrary::new();
+        let mut library = cypcb_library::design::footprint_library_for(&ast, &self.input);
         let sync_result = sync_ast_to_world(&ast, &source, &mut world, &mut library);
 
         if !sync_result.errors.is_empty() {
@@ -241,12 +241,17 @@ impl ExportCommand {
             .unwrap_or("board")
             .to_string();
 
+        // The one time every file of the export carries. A bad
+        // `SOURCE_DATE_EPOCH` stops the command here, before a file is written.
+        let stamp = cypcb_export::stamp::export_time().into_diagnostic()?;
+
         // Create export job
         let job = ExportJob {
             source_path: self.input.clone(),
             output_dir: self.output.clone(),
             preset: preset.clone(),
             board_name: board_name.clone(),
+            stamp,
         };
 
         // Dry run: list files that would be generated
@@ -527,8 +532,9 @@ impl ExportCommand {
                     }
                 })
                 .unwrap_or_default();
-            let (document, handoff_warnings) =
-                cypcb_export::ipc2581::export_ipc2581_now_with(&mut world, &library, house, &pour);
+            let (document, handoff_warnings) = cypcb_export::ipc2581::export_ipc2581_with(
+                &mut world, &library, house, job.stamp, &pour,
+            );
             // Before the file is announced, so a person reads what it could
             // not say before they read that it was written.
             for warning in handoff_warnings {

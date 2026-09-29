@@ -163,7 +163,9 @@ pub fn copper_on_layer(
     layer: Layer,
     pour_net: Option<NetId>,
 ) -> (Vec<Rect>, Vec<Rect>) {
-    use crate::components::{FootprintRef, NetConnections, Position, Rotation};
+    use crate::components::{
+        place_box, place_pad, FootprintRef, NetConnections, Position, Rotation,
+    };
 
     let mut boxes = Vec::new();
     let mut own = Vec::new();
@@ -174,10 +176,8 @@ pub fn copper_on_layer(
 
     let placements: Vec<Placement> = {
         let ecs = world.ecs_mut();
-        let mut query =
-            ecs.query::<(&Position, &Rotation, &FootprintRef, Option<&NetConnections>)>();
-        query
-            .iter(ecs)
+        crate::in_build_order::<(&Position, &Rotation, &FootprintRef, Option<&NetConnections>)>(ecs)
+            .into_iter()
             .map(|(position, rotation, footprint, nets)| {
                 let pins = nets
                     .map(|n| n.iter().map(|p| (p.pin.clone(), p.net)).collect())
@@ -196,8 +196,7 @@ pub fn copper_on_layer(
         let Some(footprint) = library.get(&name) else {
             continue;
         };
-        let radians = degrees.to_radians();
-        let (sin, cos) = radians.sin_cos();
+        let rotation = Rotation::from_degrees(degrees);
 
         for pad in &footprint.pads {
             if !pad.is_on(layer) {
@@ -209,19 +208,17 @@ pub fn copper_on_layer(
                 .map(|(_, net)| *net);
             let is_own = pad_net.is_some() && pad_net == pour_net;
 
-            let px = pad.position.x.0 as f64;
-            let py = pad.position.y.0 as f64;
-            let cx = position.x.0 + (px * cos - py * sin).round() as i64;
-            let cy = position.y.0 + (px * sin + py * cos).round() as i64;
-            let half_w = pad.size.0 .0 as f64 / 2.0;
-            let half_h = pad.size.1 .0 as f64 / 2.0;
-            let ex = (half_w * cos.abs() + half_h * sin.abs()).round() as i64;
-            let ey = (half_w * sin.abs() + half_h * cos.abs()).round() as i64;
-
-            let box_ = Rect {
-                min: Point::new(Nm(cx - ex), Nm(cy - ey)),
-                max: Point::new(Nm(cx + ex), Nm(cy + ey)),
-            };
+            let (half_w, half_h) = (pad.size.0 .0 / 2, pad.size.1 .0 / 2);
+            let box_ = place_box(
+                place_pad(position, pad.position, rotation),
+                Rect {
+                    min: Point::new(Nm(-half_w), Nm(-half_h)),
+                    max: Point::new(Nm(half_w), Nm(half_h)),
+                },
+                // The pad turns about its own centre by its part's turn and
+                // its own together.
+                Rotation(rotation.0 + pad.rotation.0),
+            );
             if is_own {
                 own.push(box_);
             } else {
@@ -233,8 +230,10 @@ pub fn copper_on_layer(
     // Traces and vias.
     let traces: Vec<Trace> = {
         let ecs = world.ecs_mut();
-        let mut query = ecs.query::<&Trace>();
-        query.iter(ecs).cloned().collect()
+        crate::in_build_order::<&Trace>(ecs)
+            .into_iter()
+            .cloned()
+            .collect()
     };
     for trace in traces {
         if trace.layer != layer || Some(trace.net_id) == pour_net {
@@ -257,8 +256,10 @@ pub fn copper_on_layer(
 
     let vias: Vec<Via> = {
         let ecs = world.ecs_mut();
-        let mut query = ecs.query::<&Via>();
-        query.iter(ecs).copied().collect()
+        crate::in_build_order::<&Via>(ecs)
+            .into_iter()
+            .copied()
+            .collect()
     };
     for via in vias {
         if Some(via.net_id) == pour_net {
@@ -303,6 +304,7 @@ mod tests {
                 slot: None,
                 layers: vec![Layer::TopCopper],
                 mask_margin: None,
+                rotation: Rotation::ZERO,
             }],
         });
 
@@ -380,6 +382,35 @@ mod tests {
         assert!(
             !filled.spokes.is_empty(),
             "a pad on the pour's own net is connected by thermal spokes"
+        );
+    }
+
+    /// The copper a pour keeps clear of, for one 1.0 by 2.0 pad at the origin
+    /// of a part at (10, 10): the part turned `part`, the pad `pad`.
+    fn pad_boxes(part: Rotation, pad: Rotation) -> (Vec<Rect>, Vec<Rect>) {
+        let (mut world, mut library) = board_with_one_pad(1);
+        let mut footprint = library.get("PAD1").unwrap().clone();
+        footprint.pads[0].size = (Nm::from_mm(1.0), Nm::from_mm(2.0));
+        footprint.pads[0].rotation = pad;
+        library.register(footprint);
+        for mut rotation in world
+            .ecs_mut()
+            .query::<&mut Rotation>()
+            .iter_mut(&mut *world.ecs_mut())
+        {
+            *rotation = part;
+        }
+        copper_on_layer(&mut world, &library, Layer::TopCopper, None)
+    }
+
+    #[test]
+    fn a_pad_turned_in_its_footprint_keeps_the_pour_off_as_its_part_turned() {
+        let turned_pad = pad_boxes(Rotation::ZERO, Rotation::DEG_90);
+        assert_eq!(turned_pad, pad_boxes(Rotation::DEG_90, Rotation::ZERO));
+        assert_ne!(
+            turned_pad,
+            pad_boxes(Rotation::ZERO, Rotation::ZERO),
+            "the control"
         );
     }
 }

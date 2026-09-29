@@ -76,6 +76,23 @@ fn the_inputs_are_the_crates_the_module_is_built_from() {
         inputs.iter().any(|input| input == "viewer/build-wasm.sh"),
         "the build script is not among the inputs: {inputs:?}"
     );
+
+    // So are the files around the source: the workspace manifest, where the
+    // `wasm-release` profile lives, a linked crate's own manifest, and the two
+    // files that pin the tools. The history half did not read these until
+    // 2026-09-26, so a commit that changed the profile alone was invisible to
+    // it; both halves read this one list now.
+    for around in [
+        "Cargo.toml",
+        "crates/cypcb-render/Cargo.toml",
+        "rust-toolchain.toml",
+        "scripts/toolchain-check.sh",
+    ] {
+        assert!(
+            inputs.iter().any(|input| input == around),
+            "{around} builds the module and is not among the inputs: {inputs:?}"
+        );
+    }
 }
 
 /// A `Cargo.lock` holding one entry per named package, enough to be parsed.
@@ -160,7 +177,7 @@ fn the_gate_asks_the_script_rather_than_its_own_list() {
         .expect("the quality gate is a script in this repository");
 
     let ask = gate
-        .find("./scripts/wasm-pkg-stale.sh")
+        .find("./scripts/wasm-pkg-stale.sh --committed")
         .expect("stage 7 no longer asks the script whether the committed module is current");
     // The list it used to carry. Two places answering the same question is how
     // one of them stays wrong.
@@ -179,6 +196,62 @@ fn the_gate_asks_the_script_rather_than_its_own_list() {
         rebuild < ask,
         "the gate asks whether the committed module is stale before rebuilding, \
          so the answer is the history's alone"
+    );
+
+    // The rebuild is from the working tree, so it answers for the commit only
+    // when the tree is the commit in every file the module is built from.
+    // `cfcb8a1c` committed a module built from an edit it did not commit, and
+    // the check let it through. The tree is held to the commit before the
+    // first stage builds anything.
+    let held = gate
+        .find("./scripts/wasm-pkg-stale.sh --dirty-inputs")
+        .expect("the gate no longer holds the working tree to the commit");
+    let first_stage = gate.find("\nstage \"").expect("the gate has no stages");
+    assert!(
+        held < first_stage,
+        "the gate builds before it checks the working tree is the commit"
+    );
+}
+
+#[test]
+fn the_tools_are_held_to_their_pins_before_anything_is_built() {
+    // The gate compares a rebuilt module with the committed one byte for byte,
+    // and the bytes are the tools' as much as the source's. `stable` in the
+    // toolchain file meant whichever release a machine last updated to.
+    let toolchain = std::fs::read_to_string(repo_root().join("rust-toolchain.toml"))
+        .expect("the toolchain file is in this repository");
+    let channel = toolchain
+        .lines()
+        .find_map(|line| line.strip_prefix("channel = \""))
+        .and_then(|rest| rest.strip_suffix('"'))
+        .expect("the toolchain file names a channel");
+    assert!(
+        !channel.is_empty() && channel.split('.').all(|part| part.parse::<u32>().is_ok()),
+        "the toolchain file pins `{channel}`, which is not a version"
+    );
+
+    let gate = std::fs::read_to_string(repo_root().join("scripts/quality-gate.sh"))
+        .expect("the quality gate is a script in this repository");
+    let check = gate
+        .find("./scripts/toolchain-check.sh")
+        .expect("the gate no longer checks the tool versions");
+    let first_stage = gate.find("\nstage \"").expect("the gate has no stages");
+    assert!(
+        check < first_stage,
+        "the gate builds before it checks the tools are the pinned ones"
+    );
+
+    let build = std::fs::read_to_string(repo_root().join("viewer/build-wasm.sh"))
+        .expect("the wasm build is a script in this repository");
+    let check = build
+        .find("./scripts/toolchain-check.sh")
+        .expect("the wasm build no longer checks the tool versions");
+    let compile = build
+        .find("\ncargo build")
+        .expect("the wasm build no longer compiles");
+    assert!(
+        check < compile,
+        "the wasm build compiles before it checks the tools are the pinned ones"
     );
 }
 

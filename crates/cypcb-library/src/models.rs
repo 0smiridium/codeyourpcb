@@ -41,6 +41,14 @@ pub struct Component {
     pub metadata: ComponentMetadata,
 }
 
+impl Component {
+    /// The name a design writes to mean this component and no other:
+    /// `source::library:name`, the way KiCad's `LIB_ID` writes `library:name`.
+    pub fn full_name(&self) -> String {
+        format!("{}::{}:{}", self.id.source, self.library, self.id.name)
+    }
+}
+
 /// Component metadata including manufacturer, datasheet, and physical properties
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ComponentMetadata {

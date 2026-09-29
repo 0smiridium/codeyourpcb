@@ -76,8 +76,14 @@ fn file_function(gerber: &str) -> String {
 
 fn export(world: &mut BoardWorld, layer: Layer) -> String {
     let library = FootprintLibrary::new();
-    export_copper_layer(world, &library, layer, &CoordinateFormat::FORMAT_MM_2_6)
-        .expect("the layer exports")
+    export_copper_layer(
+        world,
+        &library,
+        layer,
+        &CoordinateFormat::FORMAT_MM_2_6,
+        cypcb_export::stamp::Stamp::UNIX_EPOCH,
+    )
+    .expect("the layer exports")
 }
 
 #[test]
@@ -157,6 +163,7 @@ fn every_file_names_the_same_board_and_it_is_the_design() {
             Side::Top,
             &format,
             &MaskPasteConfig::default(),
+            cypcb_export::stamp::Stamp::UNIX_EPOCH,
         )
         .expect("the mask exports"),
     );
@@ -167,10 +174,14 @@ fn every_file_names_the_same_board_and_it_is_the_design() {
             Side::Top,
             &format,
             &SilkConfig::default(),
+            cypcb_export::stamp::Stamp::UNIX_EPOCH,
         )
         .expect("silk exports"),
     );
-    files.push(export_outline(&world, &format).expect("the outline exports"));
+    files.push(
+        export_outline(&world, &format, cypcb_export::stamp::Stamp::UNIX_EPOCH)
+            .expect("the outline exports"),
+    );
 
     let named: Vec<&str> = files
         .iter()

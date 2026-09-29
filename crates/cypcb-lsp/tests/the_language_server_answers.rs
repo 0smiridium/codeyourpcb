@@ -164,9 +164,14 @@ impl Server {
     }
 
     fn initialize(&mut self) -> Value {
+        self.initialize_with(json!({}))
+    }
+
+    /// Initialize as a client with these capabilities.
+    fn initialize_with(&mut self, capabilities: Value) -> Value {
         let result = self.request(
             "initialize",
-            json!({"capabilities": {}, "processId": Value::Null, "rootUri": Value::Null}),
+            json!({"capabilities": capabilities, "processId": Value::Null, "rootUri": Value::Null}),
         );
         self.notify("initialized", json!({}));
         result
@@ -735,3 +740,232 @@ fn a_design_that_imports_its_blocks_is_understood() {
         "the imported blocks were never instantiated, so the editor is checking an empty board: {messages:?}"
     );
 }
+
+/// A part on a line that opens with an emoji: one `char`, two UTF-16 units,
+/// four UTF-8 bytes. Its footprint does not exist, so the line carries an
+/// error after the emoji.
+const AFTER_AN_EMOJI: &str = "version 1
+
+board probe {
+    size 20mm x 20mm
+    layers 2
+}
+
+/* \u{1F50C} */ component R1 resistor \"NO_SUCH_FP\" {
+    value \"10k\"
+    at 5mm, 5mm
+}
+";
+
+/// Where a substring starts, as a zero-based line and a column counted in
+/// `encoding` - the count the client and server agreed on.
+fn position_in(source: &str, needle: &str, encoding: &str) -> (u32, u32) {
+    let offset = source.find(needle).expect("the needle is in the source");
+    let before = &source[..offset];
+    let line = before.matches('\n').count() as u32;
+    let start_of_line = before.rsplit('\n').next().unwrap_or("");
+    let column = match encoding {
+        "utf-8" => start_of_line.len(),
+        "utf-16" => start_of_line.encode_utf16().count(),
+        other => panic!("no such encoding in this test: {other}"),
+    } as u32;
+    (line, column)
+}
+
+/// Open the board as a client that offers `offered`, and check the server
+/// counts the way it said it would: the diagnostic lands on the footprint
+/// name and hover changes card exactly at the footprint's quotes.
+fn columns_agree_after_an_emoji(offered: Value, expected: &str) {
+    let uri = "file:///virtual/lsp-probe/emoji.cypcb";
+    let mut server = Server::start();
+    let result = server.initialize_with(offered);
+    assert_eq!(
+        result
+            .pointer("/result/capabilities/positionEncoding")
+            .and_then(Value::as_str),
+        Some(expected),
+        "the server has to say what it counts in: {result}"
+    );
+    server.open(uri, AFTER_AN_EMOJI);
+
+    let diagnostics = server.diagnostics_for(uri);
+    let unknown = diagnostics
+        .iter()
+        .find(|d| {
+            d.get("message")
+                .and_then(Value::as_str)
+                .is_some_and(|m| m.contains("NO_SUCH_FP"))
+        })
+        .unwrap_or_else(|| panic!("the footprint is unknown: {diagnostics:?}"));
+    let (line, character) = position_in(AFTER_AN_EMOJI, "\"NO_SUCH_FP\"", expected);
+    assert_eq!(
+        (
+            unknown.pointer("/range/start/line").and_then(Value::as_u64),
+            unknown
+                .pointer("/range/start/character")
+                .and_then(Value::as_u64),
+        ),
+        (Some(u64::from(line)), Some(u64::from(character))),
+        "in {expected} the name starts at {line}:{character}: {unknown}"
+    );
+
+    // Hover changes card at the footprint's quotes: the space before the
+    // opening quote is R1, the closing quote is still the footprint. A
+    // column read one unit off in either direction lands on the other card.
+    let hover_at = |server: &mut Server, needle: &str| -> String {
+        let (line, character) = position_in(AFTER_AN_EMOJI, needle, expected);
+        let hover = server.request(
+            "textDocument/hover",
+            json!({
+                "textDocument": {"uri": uri},
+                "position": {"line": line, "character": character},
+            }),
+        );
+        serde_json::to_string(hover.pointer("/result/contents").unwrap_or(&Value::Null))
+            .expect("hover contents serialize")
+    };
+    let before = hover_at(&mut server, " \"NO_SUCH_FP\"");
+    assert!(
+        before.contains("**R1**") && !before.contains("**Footprint:"),
+        "in {expected}, the space before the footprint is R1: {before}"
+    );
+    let closing = hover_at(&mut server, "\" {");
+    assert!(
+        closing.contains("**Footprint: NO_SUCH_FP**"),
+        "in {expected}, the closing quote is the footprint: {closing}"
+    );
+}
+
+/// A client that offers nothing gets UTF-16, which LSP 3.17 makes the default.
+#[test]
+fn a_client_that_offers_nothing_is_counted_in_utf16() {
+    columns_agree_after_an_emoji(json!({}), "utf-16");
+}
+
+/// A client that offers UTF-8 gets it: the text is stored in it.
+#[test]
+fn a_client_that_offers_utf8_is_counted_in_utf8() {
+    columns_agree_after_an_emoji(
+        json!({"general": {"positionEncodings": ["utf-16", "utf-8"]}}),
+        "utf-8",
+    );
+}
+
+/// A client that offers only encodings the server does not speak gets UTF-16,
+/// the one every client has to speak.
+#[test]
+fn a_client_that_offers_only_utf32_is_counted_in_utf16() {
+    columns_agree_after_an_emoji(
+        json!({"general": {"positionEncodings": ["utf-32"]}}),
+        "utf-16",
+    );
+}
+
+/// A footprint written here, so a library of any size can be built without
+/// checking a single file from KiCad into the repository.
+fn synthetic_footprint(name: &str) -> String {
+    format!(
+        "(footprint \"{name}\"\n\t(layer \"F.Cu\")\n\t(attr smd)\n\
+         \t(pad \"1\" smd rect (at -0.5 0) (size 0.5 0.5) (layers \"F.Cu\" \"F.Paste\" \"F.Mask\"))\n\
+         \t(pad \"2\" smd rect (at 0.5 0) (size 0.5 0.5) (layers \"F.Cu\" \"F.Paste\" \"F.Mask\"))\n)\n"
+    )
+}
+
+/// A project directory whose index holds `count` generated footprints, named
+/// `SYN_00000` upwards, imported the way `cypcb library import` imports.
+fn a_project_with_an_index_of(tag: &str, count: usize) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("cypcb-lsp-size-{tag}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let libraries = dir.join("libraries");
+    let pretty = libraries.join("Synthetic.pretty");
+    std::fs::create_dir_all(&pretty).expect("a place to write the library");
+    for n in 0..count {
+        let name = format!("SYN_{n:05}");
+        std::fs::write(
+            pretty.join(format!("{name}.kicad_mod")),
+            synthetic_footprint(&name),
+        )
+        .expect("the footprint is written");
+    }
+    let mut manager =
+        cypcb_library::LibraryManager::new(&dir.join("cypcb-library.db")).expect("an index");
+    manager.add_kicad_search_path(libraries.clone());
+    manager
+        .auto_import_folder(&libraries)
+        .expect("the generated library imports");
+    dir
+}
+
+const SIZED_BOARD: &str = r#"version 1
+
+board sized {
+    size 30mm x 30mm
+    layers 2
+}
+
+component R1 resistor "kicad::SYN_00001" {
+    value "330"
+    at 15mm, 15mm
+}
+"#;
+
+/// Completion inside a footprint string, against an index the size of the
+/// KiCad library, offers every name, and each in fewer than
+/// [`BYTES_PER_NAME`] bytes of answer.
+///
+/// This held a time, 50ms, and was ignored, because a time on a shared host is
+/// not a fact about the code: a debug build under load took a median of 152ms.
+/// Measured on 2026-09-27 over 50 requests, a release build took a median of
+/// 10.8ms, and the index was not what it spent it on: the names are read once
+/// per index file, in 0.03ms after the first. Serialising the answer took
+/// 3.9ms and parsing it in the client 2.7ms, and both grow with its size. So
+/// the size is what this holds - it is the same on every host.
+#[test]
+fn completion_over_ten_thousand_indexed_names_offers_each_in_a_bounded_answer() {
+    const NAMES: usize = 10_000;
+    let dir = a_project_with_an_index_of("size", NAMES);
+    let path = dir.join("board.cypcb");
+    std::fs::write(&path, SIZED_BOARD).expect("the board is written");
+    let uri = format!("file://{}", path.display());
+
+    let mut server = Server::start();
+    server.initialize();
+    server.open(&uri, SIZED_BOARD);
+    server.diagnostics_for(&uri);
+
+    let (line, character) = position_of(SIZED_BOARD, "SYN_00001\"");
+    let mut complete = || {
+        server.request(
+            "textDocument/completion",
+            json!({
+                "textDocument": {"uri": uri},
+                "position": {"line": line, "character": character},
+            }),
+        )["result"]
+            .clone()
+    };
+    let first = complete();
+    let again = complete();
+    let _ = std::fs::remove_dir_all(&dir);
+
+    let offered = first.as_array().map_or(0, Vec::len);
+    let bytes = serde_json::to_string(&first)
+        .expect("the answer serialises")
+        .len();
+    eprintln!("COMPLETION names={NAMES} items={offered} bytes={bytes}");
+    assert!(offered >= NAMES, "every indexed name is offered: {offered}");
+    assert!(
+        bytes < offered * BYTES_PER_NAME,
+        "{bytes} bytes for {offered} names - more than {BYTES_PER_NAME} a name, and the answer is \
+         serialised by the server and parsed by the client on every request"
+    );
+    assert_eq!(
+        again, first,
+        "a second request over the same index answers the same"
+    );
+}
+
+/// 81 bytes a name on 2026-09-27: a label of 26 characters, the kind and
+/// `from cypcb-library.db`. Writing `insertTextFormat` on every item, as the
+/// server did, made it 102.
+const BYTES_PER_NAME: usize = 85;

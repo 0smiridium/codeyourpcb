@@ -335,10 +335,10 @@ Save button (Ctrl+S / Cmd+S)
 
 ### Desktop: SQLite
 
-**Location:**
-- Linux: `~/.local/share/codeyourpcb/libraries.db`
-- macOS: `~/Library/Application Support/codeyourpcb/libraries.db`
-- Windows: `C:\Users\<user>\AppData\Local\codeyourpcb\libraries.db`
+**Location:** `cypcb-library.db`, written by `cypcb library import` in the
+directory it is run in (or where `--db` names). A design reads the one in its
+own directory or the nearest directory above it. The desktop app does not read
+it; see [Library Management](library-management.md).
 
 **Features:**
 - Full SQL queries
@@ -359,7 +359,6 @@ CREATE TABLE components (
     manufacturer TEXT,
     mpn TEXT,
     package TEXT,
-    metadata_json TEXT,
     thumbnail BLOB,
     model_3d_path TEXT,
     UNIQUE(source, name)

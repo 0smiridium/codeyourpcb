@@ -24,6 +24,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use cypcb_drc::{run_drc, Preset, PresetRules};
+use cypcb_fixtures::tree::tracked_in;
 use cypcb_world::footprint::FootprintLibrary;
 use cypcb_world::{sync_ast_to_world, BoardWorld};
 
@@ -52,15 +53,14 @@ fn is_about_being_unrouted(kind: &str) -> bool {
 
 #[test]
 fn no_example_ships_a_fault_somebody_would_copy() {
-    let mut files: Vec<PathBuf> = std::fs::read_dir(examples_dir())
-        .expect("the examples directory is there")
-        .filter_map(|entry| entry.ok().map(|e| e.path()))
+    let mut files: Vec<PathBuf> = tracked_in(examples_dir())
+        .into_iter()
         .filter(|path| path.extension().is_some_and(|ext| ext == "cypcb"))
         // Not what the router leaves behind. `cypcb route examples/blink.cypcb`
         // - the line the README asks a reader to type - writes
         // `examples/blink.routed.cypcb` beside its input, and a routed board
         // with clearance faults in it is a result, not an example somebody
-        // would copy. The file is git-ignored; this directory listing is not.
+        // would copy. The file is git-ignored, so git does not list it either.
         .filter(|path| {
             !path
                 .file_name()

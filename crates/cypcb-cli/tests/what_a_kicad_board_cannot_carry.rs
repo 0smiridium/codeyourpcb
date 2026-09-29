@@ -138,7 +138,7 @@ fn top_copper(board: &Path, out: &Path) -> String {
         .expect("the binary runs");
     assert!(status.success(), "the export failed");
     let gerber = out.join("gerber");
-    let top = std::fs::read_dir(&gerber)
+    let top = cypcb_fixtures::tree::written_entries(&gerber)
         .expect("the gerber directory is there")
         .filter_map(Result::ok)
         .map(|entry| entry.path())

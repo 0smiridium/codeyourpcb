@@ -24,34 +24,17 @@ cd "$(dirname "$0")/.."
 
 echo "Building WASM module..."
 
-# Both tools are checked before either failure is reported. Missing one used to
-# end the script, so a machine without either was told about `wasm-bindgen`,
-# installed it, ran the build again and was then told about `wasm-opt`. One run
-# should name everything it needs.
+# Every tool is checked, and at its version, before any failure is reported.
+# Missing one used to end the script, so a machine without either was told
+# about `wasm-bindgen`, installed it, ran the build again and was then told
+# about `wasm-opt`. One run should name everything it needs.
 #
 # wasm-opt is not optional and never was after 2026-08: the script used to warn
 # and carry on, which shipped an unoptimized module the moment binaryen was
-# missing from the machine, silently and a third larger.
-MISSING=""
-
-if ! command -v wasm-bindgen &> /dev/null; then
-    PINNED=$(grep -A1 '^name = "wasm-bindgen"$' Cargo.lock | grep '^version' | cut -d'"' -f2)
-    MISSING="${MISSING}
-  wasm-bindgen, at the version Cargo.lock pins:
-      cargo install wasm-bindgen-cli --version ${PINNED}
-      cargo binstall wasm-bindgen-cli --version ${PINNED}   # prebuilt, seconds"
-fi
-
-if ! command -v wasm-opt &> /dev/null; then
-    MISSING="${MISSING}
-  wasm-opt, from binaryen:
-      Debian/Ubuntu: apt-get install binaryen
-      macOS:         brew install binaryen"
-fi
-
-if [ -n "$MISSING" ]; then
-    echo "This build needs tools this machine does not have:"
-    echo "$MISSING"
+# missing from the machine, silently and a third larger. Present is not enough
+# either since 2026-09-26: the module is committed and compared byte for byte,
+# and nothing promises another version of any of the three the same bytes.
+if ! ./scripts/toolchain-check.sh; then
     echo ""
     echo "Or install everything at once: ./scripts/setup-dev.sh"
     exit 1
@@ -73,12 +56,18 @@ export GLIBC_TUNABLES=glibc.rtld.optional_static_tls=2048
 # `cypcb_render_bg.wasm` differ; with it both are
 # `b0e94102cef39dec22557fc78f717e3d`.
 #
-# It is the checkout that is remapped and not the home directory, so this says
-# nothing about two machines: the registry and the toolchain still live at
-# their own paths. What it buys is that one machine's answer to "does
-# rebuilding this source change the committed module" no longer depends on
-# which directory the source is sitting in.
-export RUSTFLAGS="${RUSTFLAGS:-} --remap-path-prefix=$(pwd)=/cypcb"
+# The checkout was the only directory remapped until 2026-09-26, and the
+# module is a file every clone ships. The crates it links from the registry
+# were still named by where cargo keeps them - 47 paths into the home
+# directory of whoever built it, in every module committed since the first.
+# So the two other directories rustc reads source from get neutral names too:
+# cargo's home, where the registry is, and the toolchain's sysroot, where the
+# standard library's source is when it is installed. None of the three names
+# says anything about the machine, and the module is the same bytes from any
+# directory on it.
+CARGO_HOME_DIR="${CARGO_HOME:-$HOME/.cargo}"
+SYSROOT_DIR="$(rustc --print sysroot)"
+export RUSTFLAGS="${RUSTFLAGS:-} --remap-path-prefix=$(pwd)=/cypcb --remap-path-prefix=${CARGO_HOME_DIR}=/cargo --remap-path-prefix=${SYSROOT_DIR}=/sysroot"
 
 # The `wasm` feature carries the Rust reader, so this module parses .cypcb
 # itself and PcbEngine::load_source is exported to JS.

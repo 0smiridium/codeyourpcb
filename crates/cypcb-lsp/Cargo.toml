@@ -24,6 +24,7 @@ cypcb-parser = { path = "../cypcb-parser" }
 cypcb-world = { path = "../cypcb-world", features = ["sync"] }
 cypcb-drc = { path = "../cypcb-drc" }
 cypcb-calc = { path = "../cypcb-calc" }
+cypcb-library = { path = "../cypcb-library" }
 
 # External dependencies - always needed
 miette.workspace = true
@@ -36,5 +37,8 @@ dashmap = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
 
 [dev-dependencies]
+# To write an index in the schema `cypcb library import` used before, and check
+# the editor reads it without writing to it.
+rusqlite = { version = "0.32", features = ["bundled"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 serde_json.workspace = true

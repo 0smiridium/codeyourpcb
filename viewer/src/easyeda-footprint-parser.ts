@@ -6,6 +6,7 @@
  * shapes within a footprint (LIB block).
  *
  * Unit system: 1 EasyEDA unit = 10 mil = 0.254 mm = 254,000 nm
+ * Y grows down in EasyEDA and up in a footprint: see `footprintPoint`.
  * Layer mapping: 1=TopCopper, 2=BottomCopper, 3=TopSilk, 4=BottomSilk, 11=MultiLayer (THT)
  *
  * Reference: https://docs.easyeda.com/en/DocumentFormat/EasyEDA-Format-Standard/
@@ -15,6 +16,25 @@ import type { PadInfo, SilkShape } from './types';
 
 /** EasyEDA unit → nanometers (1 unit = 10 mil = 254,000 nm) */
 const EEDA_TO_NM = 254_000;
+
+/**
+ * An EasyEDA point as a footprint point, in nanometres from the origin.
+ *
+ * EasyEDA draws on an SVG canvas, and its Y grows down the screen. A
+ * footprint's Y grows up - the convention `cypcb_world::footprint` states for
+ * the board and every footprint on it. So Y is negated here, and every point
+ * this parser reads - pad, track, circle, arc - goes through this function.
+ * easyeda2kicad (fff10a38, read 2026-09-26) copies EasyEDA's Y into KiCad's
+ * unchanged, and KiCad's Y also grows down the sheet.
+ *
+ * Until 2026-09-26 nothing negated anything, and a part fetched from EasyEDA
+ * arrived as its own mirror image: AP2112K-3.3TRG1 in SOT25 counted its pins
+ * clockwise, where the datasheet (DS39724 Rev. 2-2) counts them
+ * counter-clockwise seen from the top.
+ */
+function footprintPoint(x: number, y: number, originX: number, originY: number): [number, number] {
+  return [(x - originX) * EEDA_TO_NM, (originY - y) * EEDA_TO_NM];
+}
 
 /**
  * Parsed footprint data from EasyEDA component response.
@@ -120,6 +140,10 @@ export function parseEasyEDAFootprint(compData: any): EasyEDAFootprint | null {
           const silk = parseSilkARC(shape, ox, oy);
           if (silk) allSilk.push(silk);
         }
+        if (shape.startsWith('HOLE~')) {
+          const hole = parseHOLEShape(shape, ox, oy);
+          if (hole) allPads.push(hole);
+        }
       }
 
       if (allPads.length > 0) {
@@ -177,6 +201,10 @@ function parseLIBBlock(
       const s = parseSilkARC(subShape, ox, oy);
       if (s) silk.push(s);
     }
+    if (subShape.startsWith('HOLE~')) {
+      const hole = parseHOLEShape(subShape, ox, oy);
+      if (hole) pads.push(hole);
+    }
   }
 
   return { pads, silk, ox, oy };
@@ -194,6 +222,18 @@ function parseLIBBlock(
  * SHAPE values: ELLIPSE, RECT, OVAL, POLYGON
  * LAYERID: 1=TopCopper, 2=BottomCopper, 11=MultiLayer(THT)
  * Coordinates are absolute in EasyEDA units; we subtract origin to get relative.
+ *
+ * HOLER is a radius. The format document names it `holeR` and describes it
+ * as 孔直径, a diameter; measured 2026-09-26 against GCT USB4105 (drawing B4,
+ * 18/12/23), the slot the drawing gives as 0.60 x 1.70mm arrives as HOLER
+ * 1.378 (0.35mm) and HOLELENGTH 6.6929 (1.70mm).
+ *
+ * ROTATION turns the pad about its centre. The format document
+ * (docs.easyeda.com EasyEDA-Format-Standard, read 2026-09-26) gives no
+ * direction for it, so only the quarter turns are read: a rectangle, an oval
+ * and a slot turned by 90 or 270 degrees are the same shapes with width and
+ * height swapped, whichever way they turned. Any other angle is read as no
+ * turn and named in `approximated`.
  */
 function parsePADShape(
   padStr: string,
@@ -213,18 +253,41 @@ function parsePADShape(
   // fields[7] = net (empty for footprint definitions)
   const number = fields[8];
   const holeR = parseFloat(fields[9]) || 0;
+  const rotation = parseFloat(fields[11]) || 0;
+  const holeLength = parseFloat(fields[13]) || 0;
 
   if (isNaN(absX) || isNaN(absY) || isNaN(width) || isNaN(height)) return null;
   if (!number) return null;
 
-  // Convert coordinates relative to footprint origin, then to nanometers
-  const relX = (absX - originX) * EEDA_TO_NM;
-  const relY = (absY - originY) * EEDA_TO_NM;
-  const widthNm = width * EEDA_TO_NM;
-  const heightNm = height * EEDA_TO_NM;
+  const [relX, relY] = footprintPoint(absX, absY, originX, originY);
+  let widthNm = width * EEDA_TO_NM;
+  let heightNm = height * EEDA_TO_NM;
 
   // Hole radius → diameter in nm (holeR is radius in EasyEDA units)
   const drillNm = holeR > 0 ? Math.round(holeR * 2 * EEDA_TO_NM) : null;
+
+  // A HOLELENGTH longer than the hole is a slot. It runs along the side of
+  // the pad with room for it, before the pad turns - the reading
+  // easyeda2kicad's `drill_to_ki` makes (fff10a38, read 2026-09-26), and
+  // the one that puts USB4105's 1.70mm slots along its 2.10mm pads.
+  let slotNm: [number, number] | null = null;
+  if (drillNm && holeLength * EEDA_TO_NM > drillNm) {
+    const lengthNm = holeLength * EEDA_TO_NM;
+    slotNm = heightNm > widthNm
+      ? [drillNm, lengthNm]
+      : [lengthNm, drillNm];
+  }
+
+  const quarterTurns = ((Math.round(rotation / 90) % 4) + 4) % 4;
+  if (Math.abs(rotation - Math.round(rotation / 90) * 90) > 1e-6) {
+    // A round pad with a round hole is the same at every angle.
+    if (!(shapeType === 'ELLIPSE' && width === height && !slotNm)) {
+      approximated.push(`pad ${number} states rotation ${rotation}`);
+    }
+  } else if (quarterTurns % 2 === 1) {
+    [widthNm, heightNm] = [heightNm, widthNm];
+    if (slotNm) slotNm = [slotNm[1], slotNm[0]];
+  }
 
   // Map EasyEDA shape to our shape names
   // A shape this parser has no word for becomes a rectangle and says which
@@ -272,6 +335,47 @@ function parsePADShape(
     shape,
     layer_mask: layerMask,
     drill_nm: drillNm ? Math.round(drillNm) : null,
+    ...(slotNm ? { slot_nm: [Math.round(slotNm[0]), Math.round(slotNm[1])] as [number, number] } : {}),
+  };
+}
+
+/**
+ * Parse a HOLE shape: a drilled hole with no copper, which is what a
+ * connector's locating pegs sit in.
+ *
+ * Format: HOLE~X~Y~RADIUS~GID~LOCKED
+ *
+ * The third field is a radius, like a pad's HOLER. The format document calls
+ * it `holeR` and describes it as a diameter; measured 2026-09-26 on two
+ * parts against their drawings, it is half the hole: HRO TYPE-C-31-M-12
+ * writes 1.1811 (0.300mm) for Ø0.60, GCT USB4105 writes 1.2795 (0.325mm)
+ * for Ø0.65.
+ *
+ * It becomes a pad on no copper layer with a drill, which is how the engine
+ * knows a non-plated hole: the drill file lists it apart, and no copper file
+ * flashes it.
+ */
+function parseHOLEShape(holeStr: string, originX: number, originY: number): PadInfo | null {
+  const fields = holeStr.split('~');
+  if (fields.length < 4) return null;
+
+  const absX = parseFloat(fields[1]);
+  const absY = parseFloat(fields[2]);
+  const radius = parseFloat(fields[3]);
+  if (isNaN(absX) || isNaN(absY) || !(radius > 0)) return null;
+
+  const [relX, relY] = footprintPoint(absX, absY, originX, originY);
+  const diameterNm = Math.round(radius * 2 * EEDA_TO_NM);
+
+  return {
+    number: '',
+    x_nm: Math.round(relX),
+    y_nm: Math.round(relY),
+    width_nm: diameterNm,
+    height_nm: diameterNm,
+    shape: 'circle',
+    layer_mask: 0,
+    drill_nm: diameterNm,
   };
 }
 
@@ -302,10 +406,8 @@ function parseSilkTRACK(trackStr: string, ox: number, oy: number): SilkShape[] {
   const segments: SilkShape[] = [];
 
   for (let i = 0; i < coords.length - 2; i += 2) {
-    const x1 = (coords[i] - ox) * EEDA_TO_NM;
-    const y1 = (coords[i + 1] - oy) * EEDA_TO_NM;
-    const x2 = (coords[i + 2] - ox) * EEDA_TO_NM;
-    const y2 = (coords[i + 3] - oy) * EEDA_TO_NM;
+    const [x1, y1] = footprintPoint(coords[i], coords[i + 1], ox, oy);
+    const [x2, y2] = footprintPoint(coords[i + 2], coords[i + 3], ox, oy);
 
     if (!isNaN(x1) && !isNaN(y1) && !isNaN(x2) && !isNaN(y2)) {
       segments.push({
@@ -333,8 +435,7 @@ function parseSilkCIRCLE(circleStr: string, ox: number, oy: number): SilkShape |
   const layer = silkLayer(fields[5]);
   if (!layer) return null;
 
-  const cx = (parseFloat(fields[1]) - ox) * EEDA_TO_NM;
-  const cy = (parseFloat(fields[2]) - oy) * EEDA_TO_NM;
+  const [cx, cy] = footprintPoint(parseFloat(fields[1]), parseFloat(fields[2]), ox, oy);
   const radius = parseFloat(fields[3]) * EEDA_TO_NM;
   const width = parseFloat(fields[4]) * EEDA_TO_NM;
 
@@ -369,26 +470,33 @@ function parseSilkARC(arcStr: string, ox: number, oy: number): SilkShape | null 
   const aMatch = pathData.match(/A\s*([-\d.]+)\s+([-\d.]+)\s+([-\d.]+)\s+(\d)\s+(\d)\s+([-\d.]+)\s+([-\d.]+)/);
   if (!mMatch || !aMatch) return null;
 
-  const sx = (parseFloat(mMatch[1]) - ox) * EEDA_TO_NM;
-  const sy = (parseFloat(mMatch[2]) - oy) * EEDA_TO_NM;
+  const [sx, sy] = footprintPoint(parseFloat(mMatch[1]), parseFloat(mMatch[2]), ox, oy);
   const rx = parseFloat(aMatch[1]) * EEDA_TO_NM;
   const ry = parseFloat(aMatch[2]) * EEDA_TO_NM;
   const largeArc = aMatch[4] === '1';
-  const sweep = aMatch[5] === '1';
-  const ex = (parseFloat(aMatch[6]) - ox) * EEDA_TO_NM;
-  const ey = (parseFloat(aMatch[7]) - oy) * EEDA_TO_NM;
+  // The sweep flag names the direction of rising angle in EasyEDA's Y-down
+  // frame. Negating Y turns that direction round, so the flag turns with it.
+  const sweep = aMatch[5] !== '1';
+  const [ex, ey] = footprintPoint(parseFloat(aMatch[6]), parseFloat(aMatch[7]), ox, oy);
 
   // Convert SVG arc to center + angles for canvas rendering
   const arc = svgArcToCenter(sx, sy, rx, ry, largeArc, sweep, ex, ey);
   if (!arc) return null;
+
+  // A silk arc runs counter-clockwise from its start to its end, which is how
+  // the canvas draws it. One that runs the other way is the same ink from its
+  // end to its start.
+  const [startAngle, endAngle] = arc.endAngle >= arc.startAngle
+    ? [arc.startAngle, arc.endAngle]
+    : [arc.endAngle, arc.startAngle];
 
   return {
     type: 'arc',
     cx: Math.round(arc.cx),
     cy: Math.round(arc.cy),
     radius: Math.round((rx + ry) / 2), // average for elliptical arcs
-    startAngle: arc.startAngle,
-    endAngle: arc.endAngle,
+    startAngle,
+    endAngle,
     width: Math.round(width),
     layer,
   };

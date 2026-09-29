@@ -205,6 +205,8 @@ When the user types in the editor:
 6. Diagnostics returned to LSP bridge
 7. LSP bridge updates Monaco markers
 
+The wait is `EDITOR_SYNC_DEBOUNCE_MS` in `viewer/src/main.ts`.
+
 **Why 300ms?** Balances responsiveness with performance. Typing doesn't feel laggy, but parsing doesn't run on every keystroke.
 
 #### Suppress-Sync Flag
@@ -306,21 +308,44 @@ Hover over any keyword to see its documentation:
 
 ## Performance Characteristics
 
-### Parse Performance
+### When the editor loads the text
 
-- **Small files (<100 lines):** <10ms parse time
-- **Medium files (100-500 lines):** 10-50ms parse time
-- **Large files (>500 lines):** 50-200ms parse time
+The browser editor waits 300ms after the last keystroke, then loads the whole design into the engine: parse, import resolution, board model and the full DRC, in one call. The wait is `EDITOR_SYNC_DEBOUNCE_MS` in `viewer/src/main.ts`.
 
-**300ms debounce** ensures parsing never blocks typing, even on large files.
+The stdio server `cypcb-lsp` does not wait. It parses the document and rebuilds the board on every change it receives (`did_change` in `crates/cypcb-lsp/src/backend.rs`).
 
-### DRC Performance
+### Parse and DRC time
 
-- **Simple boards (<10 components):** <5ms DRC time
-- **Medium boards (10-50 components):** 5-20ms DRC time
-- **Complex boards (>50 components):** 20-100ms DRC time
+Measured 2026-09-27 on the build machine: release build, quiet host (load average 2.6), 50 runs per board after one warm-up. This is the native build of the engine, not the WASM build the browser runs. Times are in milliseconds, median / max. Parse is the reader alone; whole load is what the editor pays after the wait.
 
-DRC runs after parsing in the same sync cycle.
+| Board | Lines | Components | Parse | DRC | Whole load |
+|-------|------:|-----------:|------:|----:|-----------:|
+| `examples/blink.cypcb` | 112 | 9 | 0.01 / 0.02 | 0.21 / 0.32 | 0.30 / 0.34 |
+| `examples/mains-sequencer.cypcb` | 404 | 33 | 0.08 / 0.11 | 1.23 / 1.36 | 1.55 / 1.97 |
+| `tests/fixtures/benchmark/esp32_starter.cypcb` | 436 | 18 | 0.09 / 0.11 | 1.44 / 1.59 | 1.85 / 2.14 |
+| `tests/fixtures/benchmark/led_blink.kicad_pcb` | 152 | 7 | 0.16 / 0.25 | 0.18 / 0.23 | 0.38 / 0.55 |
+| `tests/fixtures/benchmark/plane_board.kicad_pcb` | 212 | 12 | 0.27 / 0.31 | 0.49 / 0.54 | 0.94 / 1.29 |
+| `tests/fixtures/benchmark/qfp_fanout.kicad_pcb` | 379 | 19 | 0.56 / 0.66 | 1.33 / 1.84 | 2.08 / 2.31 |
+| `tests/fixtures/benchmark/stm32_breakout.kicad_pcb` | 456 | 29 | 0.58 / 0.86 | 1.33 / 1.73 | 1.85 / 2.22 |
+| `tests/fixtures/benchmark/shift_driver.kicad_pcb` | 688 | 55 | 0.70 / 0.78 | 2.14 / 2.83 | 2.86 / 3.93 |
+| `tests/fixtures/benchmark/multi_ic.kicad_pcb` | 905 | 52 | 0.90 / 1.00 | 2.50 / 3.57 | 3.54 / 4.55 |
+
+The slowest board, `multi_ic`, in each build and on a busy host. Busy is a `cargo build --release -j3` of the workspace running beside it (three `rustc` processes, load average 6.1).
+
+| Build, host | Parse | DRC | Whole load |
+|-------------|------:|----:|-----------:|
+| release, quiet | 0.90 / 1.00 | 2.50 / 3.57 | 3.54 / 4.55 |
+| release, busy | 0.91 / 1.31 | 2.57 / 3.04 | 3.61 / 4.40 |
+| debug, quiet | 5.27 / 7.62 | 3.29 / 3.91 | 8.81 / 12.95 |
+| debug, busy | 5.43 / 9.41 | 3.28 / 5.08 | 9.10 / 14.27 |
+
+To repeat the measurement, run the test that keeps this table. It prints each row again in the same form:
+
+```bash
+cargo test --release -p cypcb-render --features native --test the_editor_timings_are_measured -- --nocapture
+```
+
+The test checks the lines and the components of every row against the board, and the wait above against `viewer/src/main.ts`. The milliseconds are this measurement and move with the machine. `loading_a_board_is_quick` sets the ceiling a load of any example must stay under.
 
 ### Memory Usage
 

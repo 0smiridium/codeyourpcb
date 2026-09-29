@@ -44,8 +44,7 @@ fn every_rule_that_walks_the_index_collects_pads() {
     let mut offenders = Vec::new();
     let mut box_readers = Vec::new();
 
-    for entry in std::fs::read_dir(rules_dir()).expect("the rules live in one directory") {
-        let path = entry.expect("a directory entry").path();
+    for path in cypcb_fixtures::tree::tracked_in(rules_dir()) {
         if path.extension().and_then(|e| e.to_str()) != Some("rs") {
             continue;
         }

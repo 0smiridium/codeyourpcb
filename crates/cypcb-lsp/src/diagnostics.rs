@@ -60,7 +60,7 @@ pub fn run_diagnostics(doc: &DocumentState) -> Vec<Diagnostic> {
     }
 
     // 4. A fab name this tool does not have. The board is still checked -
-    //    against JLCPCB - so this is a warning rather than an error, and it
+    //    against JLCPCB for its layer count - so this is a warning rather than an error, and it
     //    sits on the word that caused it because that is where the fix goes.
     if let Some(unknown) = &doc.fab_fallback {
         let available: Vec<&str> = cypcb_drc::Preset::all()
@@ -79,8 +79,9 @@ pub fn run_diagnostics(doc: &DocumentState) -> Vec<Diagnostic> {
             source: "cypcb",
             message: format!(
                 "The board asks for fab '{}', which is not a preset this tool has. \
-                 Checking against jlcpcb instead. Available presets: {}",
+                 Checking against {} instead. Available presets: {}",
                 unknown.named,
+                doc.checked_against.map_or("jlcpcb", |preset| preset.name()),
                 available.join(", ")
             ),
         });
@@ -96,6 +97,10 @@ pub fn run_diagnostics(doc: &DocumentState) -> Vec<Diagnostic> {
     // declaration, so the editor stacked two dozen identical squiggles on one
     // line - and, worse, spent the diagnostic budget on them. The cap below is
     // 100, so duplicates of one contact push *different* faults off the end.
+    // Since 2026-09-26 the rule counts one row per place - one unbroken run of
+    // a trace too close to one pad, one via or one other net's trace - so a run
+    // along one pad is one row however many segments it takes. On the shipped
+    // benchmarks 319 rows for 152 contacts became 219 for the same 152.
     //
     // The marker kept is the worst of its group, not the first: keeping
     // whichever came first would show a 0.11mm near-miss and hide a 0.00mm

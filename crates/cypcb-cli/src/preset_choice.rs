@@ -12,8 +12,11 @@
 //! asking a specific question about a specific fab is not overridden by the
 //! file - and JLCPCB remains the answer when neither says anything, which is
 //! what it has always been.
+//!
+//! The choice itself is `cypcb_drc::table_for`, which the language server and
+//! the browser engine read too. This file only words the refusal.
 
-use cypcb_drc::preset_for_world;
+use cypcb_drc::table_choice::Origin;
 use cypcb_rules::presets::RulesPreset;
 use cypcb_world::BoardWorld;
 use miette::Result;
@@ -25,53 +28,20 @@ use miette::Result;
 /// came from - a typo in a file and a typo on the command line are fixed in
 /// different places.
 pub fn resolve(flag: Option<&str>, world: &BoardWorld) -> Result<RulesPreset> {
-    if let Some(name) = flag {
-        let chosen = by_name(name, Origin::Flag)?;
-        return Ok(for_this_board(chosen, name, world));
-    }
-    if let Some(name) = world.fab() {
-        let chosen = by_name(name, Origin::Design)?;
-        return Ok(for_this_board(chosen, name, world));
-    }
-    Ok(preset_for_world(RulesPreset::JlcpcbStandard2Layer, world))
-}
-
-/// The layer-count sibling of a preset, unless the name asked for one.
-///
-/// `fab jlcpcb` names a house, and a house publishes one table per layer
-/// count: a four-layer board belongs on the four-layer table. `--preset
-/// jlcpcb_standard_2layer` names a table, and somebody who wrote that on a
-/// four-layer board is asking a specific question and is not overruled here -
-/// the same rule the flag already follows against the design.
-fn for_this_board(chosen: RulesPreset, written: &str, world: &BoardWorld) -> RulesPreset {
-    if written.to_ascii_lowercase().contains("layer") {
-        return chosen;
-    }
-    preset_for_world(chosen, world)
-}
-
-/// Where a preset name was written.
-#[derive(Clone, Copy)]
-enum Origin {
-    Flag,
-    Design,
-}
-
-fn by_name(name: &str, origin: Origin) -> Result<RulesPreset> {
-    RulesPreset::from_name(name).ok_or_else(|| {
+    cypcb_drc::table_for(flag, world).map_err(|unknown| {
         // Listed from the presets themselves, so the message cannot go stale
         // when one is added.
         let available: Vec<&str> = RulesPreset::all().iter().map(|p| p.name()).collect();
-        match origin {
-            Origin::Flag => miette::miette!(
+        match unknown.origin {
+            Origin::Caller => miette::miette!(
                 "Unknown preset '{}'. Available presets: {}",
-                name,
+                unknown.name,
                 available.join(", ")
             ),
             Origin::Design => miette::miette!(
                 "The board asks for fab '{}', which is not a preset this tool has. \
                  Available presets: {}",
-                name,
+                unknown.name,
                 available.join(", ")
             ),
         }

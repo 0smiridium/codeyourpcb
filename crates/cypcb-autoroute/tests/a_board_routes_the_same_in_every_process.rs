@@ -50,7 +50,16 @@ fn route(name: &str) -> u64 {
     assert!(parsed.is_ok(), "{name} has to parse");
     let mut world = BoardWorld::new();
     let mut library = FootprintLibrary::new();
-    let _ = sync_ast_to_world(&parsed.value, &source, &mut world, &mut library);
+    let synced = sync_ast_to_world(&parsed.value, &source, &mut world, &mut library);
+    assert!(
+        synced.errors.is_empty(),
+        "{name} does not load: {:?}",
+        synced
+            .errors
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+    );
 
     let preset = preset_for_world(RulesPreset::JlcpcbStandard2Layer, &world);
     let rules = ruleset_for_world(preset, &world);
@@ -104,7 +113,11 @@ fn a_board_routes_the_same_in_every_process() {
             .output()
             .expect("the test binary starts again");
         let stdout = String::from_utf8_lossy(&output.stdout);
-        assert!(output.status.success(), "a child failed:\n{stdout}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            output.status.success(),
+            "a child failed:\n{stdout}\n{stderr}"
+        );
 
         for (index, name) in BOARDS.iter().enumerate() {
             let prefix = format!("ROUTED {name} ");

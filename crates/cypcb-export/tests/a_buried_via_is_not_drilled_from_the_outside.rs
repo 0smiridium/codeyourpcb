@@ -42,6 +42,7 @@ fn the_through_file_carries_only_the_through_hole() {
         &library,
         &CoordinateFormat::FORMAT_MM_2_6,
         Some(DrillType::Plated),
+        cypcb_export::stamp::Stamp::UNIX_EPOCH,
     )
     .expect("the drill file is written");
 
@@ -72,6 +73,7 @@ fn the_buried_via_gets_a_file_for_the_pair_it_joins() {
         &CoordinateFormat::FORMAT_MM_2_6,
         Some(DrillType::Plated),
         (Layer::Inner(0), Layer::Inner(1)),
+        cypcb_export::stamp::Stamp::UNIX_EPOCH,
     )
     .expect("the pair's drill file is written");
 

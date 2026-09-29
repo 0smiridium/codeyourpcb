@@ -101,9 +101,27 @@ fn a_corner_larger_than_half_the_pad_is_refused() {
 fn the_writer_says_the_corner_the_reader_read() {
     let source = design_with(" corner 20%");
     let parsed = cypcb_parser::parse(&source);
+    assert!(
+        parsed.errors.is_empty(),
+        "the design with a corner does not parse: {:?}",
+        parsed
+            .errors
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+    );
     let mut world = BoardWorld::new();
     let mut library = FootprintLibrary::new();
-    sync_ast_to_world(&parsed.value, &source, &mut world, &mut library);
+    let synced = sync_ast_to_world(&parsed.value, &source, &mut world, &mut library);
+    assert!(
+        synced.errors.is_empty(),
+        "the design with a corner does not load: {:?}",
+        synced
+            .errors
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+    );
 
     let written = cypcb_world::dsl::board_as_dsl(&mut world);
     assert!(

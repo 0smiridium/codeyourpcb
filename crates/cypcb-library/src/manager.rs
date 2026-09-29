@@ -9,6 +9,16 @@ use rusqlite::Connection;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
+/// What [`LibraryManager::import_folder`] did.
+#[derive(Debug, Default)]
+pub struct FolderImport {
+    /// Each library found, by name, with what its import wrote and refused.
+    pub imported: Vec<(String, schema::BatchOutcome)>,
+    /// Each library imported from the folder before whose `.pretty` folder
+    /// is gone, by name, with the footprints removed with it.
+    pub gone: Vec<(String, usize)>,
+}
+
 /// LibraryManager - unified orchestrator for all library operations
 ///
 /// Provides single entry point for:
@@ -43,6 +53,28 @@ impl LibraryManager {
         let conn = Connection::open(db_path)?;
         schema::initialize_schema(&conn)?;
 
+        let conn = Arc::new(Mutex::new(conn));
+
+        Ok(Self {
+            conn: Arc::clone(&conn),
+            kicad_source: KiCadSource::new(Vec::new()),
+            custom_source: CustomSource::new(Arc::clone(&conn)),
+            #[cfg(feature = "jlcpcb")]
+            jlcpcb_source: None,
+        })
+    }
+
+    /// Open the index at `db_path` to read it, and write nothing to it.
+    ///
+    /// [`LibraryManager::new`] moves a file in an older schema to the current
+    /// one, which writes the file. A design is only read against an index, and
+    /// the editor opened it on every keystroke, so opening a project in the
+    /// editor rewrote the user's index. The queries a design asks read an
+    /// older file as it is: its components carry the library column too, and
+    /// its key held one library per name. `cypcb library` still moves it.
+    pub fn open_read_only(db_path: &Path) -> Result<Self, LibraryError> {
+        let conn =
+            Connection::open_with_flags(db_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
         let conn = Arc::new(Mutex::new(conn));
 
         Ok(Self {
@@ -98,33 +130,46 @@ impl LibraryManager {
     ///
     /// Parses all .kicad_mod files in the library and indexes them for search.
     ///
+    /// The library then holds what its folder holds: a footprint whose file
+    /// is gone since the last import is removed from the index.
+    ///
     /// # Returns
-    /// Number of components imported
-    pub fn import_kicad_library(&self, name: &str) -> Result<usize, LibraryError> {
+    /// The components written, the ones refused with the reason, and the
+    /// rows removed
+    pub fn import_kicad_library(&self, name: &str) -> Result<schema::BatchOutcome, LibraryError> {
         // Get components from KiCad source
         let components = self.kicad_source.import_library(name)?;
 
-        if components.is_empty() {
-            return Ok(0);
-        }
-
-        // Create library record
+        // Create library record. The folder is kept, so a later import of
+        // the directory holding it can tell when it is gone.
         let library = LibraryInfo {
             source: "kicad".to_string(),
             name: name.to_string(),
-            path: None,
+            path: self
+                .kicad_source
+                .library_folder(name)
+                .map(|folder| folder.to_string_lossy().into_owned()),
             version: None,
             enabled: true,
-            component_count: components.len(),
+            component_count: 0,
         };
 
         let mut conn = self.conn.lock().unwrap();
-        schema::insert_library(&conn, &library)?;
+        if !components.is_empty() {
+            schema::insert_library(&conn, &library)?;
+        }
 
-        // Batch insert components
-        let count = schema::insert_components_batch(&mut conn, &components)?;
+        let outcome = schema::replace_library_components(&mut conn, "kicad", name, &components)?;
 
-        Ok(count)
+        // The count is the rows the library holds, not the files it was read from.
+        conn.execute(
+            "UPDATE libraries SET component_count =
+                (SELECT count(*) FROM components WHERE source = ?1 AND library = ?2)
+             WHERE source = ?1 AND name = ?2",
+            rusqlite::params!["kicad", name],
+        )?;
+
+        Ok(outcome)
     }
 
     /// Auto-import all libraries from a folder
@@ -134,14 +179,31 @@ impl LibraryManager {
     /// # Returns
     /// List of imported library names
     pub fn auto_import_folder(&self, path: &Path) -> Result<Vec<String>, LibraryError> {
-        let libraries = KiCadSource::auto_organize_folder(path)?;
+        Ok(self
+            .import_folder(path)?
+            .imported
+            .into_iter()
+            .map(|(name, _)| name)
+            .collect())
+    }
+
+    /// Import every `.pretty` library under a folder, in name order, and say
+    /// for each one what was written and what was refused.
+    ///
+    /// A library imported from this folder before whose `.pretty` folder is
+    /// gone now leaves the index with its footprints; `gone` names it and
+    /// counts them. A library whose folder was not recorded, imported before
+    /// the folder was kept, cannot be told apart and stays.
+    pub fn import_folder(&self, path: &Path) -> Result<FolderImport, LibraryError> {
+        let mut libraries = KiCadSource::auto_organize_folder(path)?;
+        libraries.sort_by(|a, b| a.name.cmp(&b.name));
         let mut imported = Vec::new();
 
         for lib in libraries {
             // Import each discovered library
             match self.import_kicad_library(&lib.name) {
-                Ok(_) => {
-                    imported.push(lib.name);
+                Ok(outcome) => {
+                    imported.push((lib.name, outcome));
                 }
                 Err(e) => {
                     eprintln!("Warning: Failed to import library '{}': {}", lib.name, e);
@@ -149,7 +211,13 @@ impl LibraryManager {
             }
         }
 
-        Ok(imported)
+        let mut conn = self.conn.lock().unwrap();
+        let gone = schema::remove_libraries_where(&mut conn, "kicad", |folder| {
+            let folder = Path::new(folder);
+            folder.parent() == Some(path) && !folder.is_dir()
+        })?;
+
+        Ok(FolderImport { imported, gone })
     }
 
     // ========== Search Operations ==========
@@ -225,20 +293,28 @@ impl LibraryManager {
 
     // ========== Component Access ==========
 
-    /// Get a specific component by source and name
+    /// The component a design means by `source::written`, where `written`
+    /// is `library:name` or a bare `name`; see [`schema::get_component`].
     pub fn get_component(
         &self,
         source: &str,
-        name: &str,
+        written: &str,
     ) -> Result<Option<Component>, LibraryError> {
         let conn = self.conn.lock().unwrap();
-        schema::get_component(&conn, source, name)
+        schema::get_component(&conn, source, written)
     }
 
     /// Get total count of components in database
     pub fn component_count(&self) -> Result<usize, LibraryError> {
         let conn = self.conn.lock().unwrap();
         search::component_count(&conn)
+    }
+
+    /// Every component that carries a footprint, by the name `library search`
+    /// prints and a design writes: `source::library:name`.
+    pub fn footprint_names(&self) -> Result<Vec<String>, LibraryError> {
+        let conn = self.conn.lock().unwrap();
+        schema::footprint_names(&conn)
     }
 
     // ========== Custom Library Operations ==========
@@ -593,8 +669,7 @@ mod tests {
         // Verify updates
         let retrieved = manager.get_component("custom", "R_Test").unwrap().unwrap();
         assert_eq!(retrieved.category, Some("Passive/Resistors".to_string()));
-        // Note: manufacturer update only updates the column, not the metadata_json
-        // This is expected behavior based on CustomSource implementation
+        assert_eq!(retrieved.metadata.manufacturer, Some("NewMfg".to_string()));
     }
 
     #[test]

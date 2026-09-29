@@ -6,7 +6,7 @@
 
 use crate::coords::{nm_to_decimal, CoordinateFormat};
 use cypcb_world::components::PadShape as WorldPadShape;
-use cypcb_world::footprint::PadDef;
+use cypcb_world::footprint::PadOutline;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -194,38 +194,37 @@ impl ApertureManager {
     }
 }
 
-/// Convert a pad definition to an aperture shape.
+/// The aperture a pad is flashed with, once it is turned with its part.
 ///
-/// Maps the internal pad shape representation to the corresponding
-/// Gerber aperture shape.
-///
-/// # Arguments
-///
-/// * `pad` - The pad definition from the footprint library
-///
-/// # Examples
+/// It takes the pad's [`PadOutline`] rather than its definition, so the width
+/// and height are the ones along the board's axes: a part turned a quarter
+/// turn gets its pads' sides swapped, which the definition alone cannot say.
 ///
 /// ```
-/// use cypcb_export::apertures::aperture_for_pad;
+/// use cypcb_export::apertures::{aperture_for_pad, ApertureShape};
 /// use cypcb_world::footprint::PadDef;
-/// use cypcb_world::components::{PadShape, Layer};
+/// use cypcb_world::components::{PadShape, Layer, Rotation};
 /// use cypcb_core::{Nm, Point};
 ///
 /// let pad = PadDef {
 ///     number: "1".into(),
-///     shape: PadShape::Circle,
+///     shape: PadShape::Rect,
 ///     position: Point::ORIGIN,
-///     size: (Nm::from_mm(1.0), Nm::from_mm(1.0)),
+///     size: (Nm::from_mm(1.0), Nm::from_mm(1.45)),
 ///     drill: None,
 ///     slot: None,
 ///     layers: vec![Layer::TopCopper],
 ///     mask_margin: None,
+///     rotation: Rotation::ZERO,
 /// };
 ///
-/// let aperture = aperture_for_pad(&pad);
-/// // Circle pads use the width as diameter
+/// let turned = aperture_for_pad(&pad.outline(Point::ORIGIN, Rotation::DEG_90));
+/// assert_eq!(
+///     turned,
+///     ApertureShape::Rectangle { width: Nm::from_mm(1.45).0, height: Nm::from_mm(1.0).0 }
+/// );
 /// ```
-pub fn aperture_for_pad(pad: &PadDef) -> ApertureShape {
+pub fn aperture_for_pad(pad: &PadOutline) -> ApertureShape {
     let (width, height) = pad.size;
 
     match pad.shape {
@@ -307,7 +306,8 @@ mod tests {
     use super::*;
     use cypcb_core::Nm;
     use cypcb_core::Point;
-    use cypcb_world::components::Layer;
+    use cypcb_world::components::{Layer, Rotation};
+    use cypcb_world::footprint::PadDef;
 
     #[test]
     fn test_aperture_manager_new() {
@@ -465,9 +465,10 @@ mod tests {
             slot: None,
             layers: vec![Layer::TopCopper],
             mask_margin: None,
+            rotation: Rotation::ZERO,
         };
 
-        let aperture = aperture_for_pad(&pad);
+        let aperture = aperture_for_pad(&pad.outline(Point::ORIGIN, Rotation::ZERO));
         assert_eq!(
             aperture,
             ApertureShape::Circle {
@@ -487,9 +488,10 @@ mod tests {
             slot: None,
             layers: vec![Layer::TopCopper],
             mask_margin: None,
+            rotation: Rotation::ZERO,
         };
 
-        let aperture = aperture_for_pad(&pad);
+        let aperture = aperture_for_pad(&pad.outline(Point::ORIGIN, Rotation::ZERO));
         assert_eq!(
             aperture,
             ApertureShape::Rectangle {
@@ -510,9 +512,10 @@ mod tests {
             slot: None,
             layers: vec![Layer::TopCopper],
             mask_margin: None,
+            rotation: Rotation::ZERO,
         };
 
-        let aperture = aperture_for_pad(&pad);
+        let aperture = aperture_for_pad(&pad.outline(Point::ORIGIN, Rotation::ZERO));
         assert_eq!(
             aperture,
             ApertureShape::Oblong {
@@ -533,9 +536,10 @@ mod tests {
             slot: None,
             layers: vec![Layer::TopCopper],
             mask_margin: None,
+            rotation: Rotation::ZERO,
         };
 
-        let aperture = aperture_for_pad(&pad);
+        let aperture = aperture_for_pad(&pad.outline(Point::ORIGIN, Rotation::ZERO));
         assert_eq!(
             aperture,
             ApertureShape::RoundRect {

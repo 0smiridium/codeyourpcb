@@ -23,6 +23,7 @@ pub mod hatch_etchable;
 pub mod hole_to_edge;
 pub mod hole_to_hole;
 pub mod impedance;
+pub mod land_outside_courtyard;
 pub mod mounting_hole_clearance;
 mod neck_down;
 pub mod net_split;
@@ -43,6 +44,7 @@ pub mod via_drill;
 pub mod via_span;
 pub mod zone_overlap;
 
+use cypcb_world::in_build_order;
 use cypcb_world::BoardWorld;
 
 /// Placement geometry, from the crate that owns the model.
@@ -113,9 +115,10 @@ pub use hatch_etchable::HatchEtchableRule;
 pub use hole_to_edge::HoleToEdgeRule;
 pub use hole_to_hole::HoleToHoleRule;
 pub use impedance::ImpedanceRule;
+pub use land_outside_courtyard::LandOutsideCourtyardRule;
 pub use mounting_hole_clearance::MountingHoleClearanceRule;
 pub use neck_down::NeckDownRule;
-pub use net_split::NetSplitRule;
+pub use net_split::{copper_pieces, CopperPiece, NetCopper, NetSplitRule, PiecePin, PieceSegment};
 pub use pad_entry::PadEntryRule;
 pub use pad_land::PadLandRule;
 pub use paste_clearance::PasteClearanceRule;
@@ -381,9 +384,8 @@ pub(crate) fn holes_of(world: &mut BoardWorld) -> Vec<Hole> {
 
     let mut holes: Vec<Hole> = {
         let ecs = world.ecs_mut();
-        let mut query = ecs.query::<(bevy_ecs::entity::Entity, &Via)>();
-        query
-            .iter(ecs)
+        in_build_order::<(bevy_ecs::entity::Entity, &Via)>(ecs)
+            .into_iter()
             .map(|(entity, via)| Hole {
                 entity,
                 start: via.position,
@@ -398,16 +400,15 @@ pub(crate) fn holes_of(world: &mut BoardWorld) -> Vec<Hole> {
 
     let components: Vec<_> = {
         let ecs = world.ecs_mut();
-        let mut query = ecs.query::<(
+        in_build_order::<(
             bevy_ecs::entity::Entity,
             &FootprintRef,
             &Position,
             &Rotation,
-        )>();
-        query
-            .iter(ecs)
-            .map(|(e, f, p, r)| (e, f.clone(), *p, *r))
-            .collect()
+        )>(ecs)
+        .into_iter()
+        .map(|(e, f, p, r)| (e, f.clone(), *p, *r))
+        .collect()
     };
 
     // The board carries the table it was synced with, including any footprint

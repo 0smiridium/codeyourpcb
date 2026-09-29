@@ -167,7 +167,7 @@ impl RouteCommand {
         // Build world from AST
         eprintln!("Building board model...");
         let mut world = BoardWorld::new();
-        let mut library = FootprintLibrary::new();
+        let mut library = cypcb_library::design::footprint_library_for(&ast, &self.file);
         let sync_result = sync_ast_to_world(&ast, &source, &mut world, &mut library);
 
         if !sync_result.errors.is_empty() {
@@ -647,6 +647,17 @@ impl RouteCommand {
             .into_diagnostic()
             .wrap_err_with(|| format!("Failed to write {}", out_path.display()))?;
 
+        // The same line a `.cypcb` board gets, from the same place: the file
+        // as the checker reads it. A KiCad board printed no DRC line at all,
+        // so the only number a routed KiCad board carried was the scorer's.
+        {
+            let written = crate::board_source::load_kicad(&out_path)
+                .wrap_err("The routed board does not read back")?;
+            let mut written_world = written.world;
+            let checked = crate::preset_choice::resolve(self.preset.as_deref(), &written_world)?;
+            say_what_the_checker_finds(&mut written_world, &checked);
+        }
+
         eprintln!(
             "Wrote {} ({} segments, {} vias) in {:.2}s",
             out_path.display(),
@@ -743,32 +754,6 @@ impl RouteCommand {
 
         apply_routes(&mut world, &result);
 
-        // What the checker will say about the file we are about to write. The
-        // scorer's number ranks candidates during the search; this one is the
-        // board, measured the way `cypcb check` measures it, and the two have
-        // disagreed by a factor of six.
-        {
-            use cypcb_drc::{run_drc, DesignRules};
-            world.rebuild_spatial_index_from_library(&library);
-            let report = run_drc(
-                &mut world,
-                &DesignRules::from_constraints(&preset.constraints()),
-            );
-            let shorts = cypcb_drc::shorts(&report.violations);
-            if shorts > 0 {
-                eprintln!(
-                    "DRC on the routed board: {} violations, {} of them copper touching copper",
-                    report.violations.len(),
-                    shorts
-                );
-            } else {
-                eprintln!(
-                    "DRC on the routed board: {} violations, none of them touching",
-                    report.violations.len()
-                );
-            }
-        }
-
         // Only what the router drew. The file this writes is a copy of the
         // source with copper appended, so the source's own traces are already
         // in it: writing the whole world on top of that put every hand-drawn
@@ -792,6 +777,24 @@ impl RouteCommand {
             "\n// Traces below were produced by `cypcb route`: {how}.\n"
         ));
         out.push_str(&traces);
+
+        // What the checker will say about the file we are about to write,
+        // asked of that file. The scorer's number ranks candidates during the
+        // search; this one is the board, and it has disagreed with `cypcb
+        // check` twice: by a factor of six when it was the scorer's, and on
+        // `esp32_starter` by 44 shorts to 46 when it was measured on the
+        // world in memory. The segments were the same on both sides; the
+        // reader puts each `path` in an entity of its own where the router
+        // holds one per net and layer, and the clearance check counts per pair
+        // of entities. Read back through the checker's own reader, the number
+        // printed here is the number `cypcb check` prints on the file.
+        {
+            let written = crate::board_source::read_cypcb(&routed_path, &out, false)
+                .wrap_err("The routed board does not read back")?;
+            let mut written_world = written.world;
+            let checked = crate::preset_choice::resolve(self.preset.as_deref(), &written_world)?;
+            say_what_the_checker_finds(&mut written_world, &checked);
+        }
 
         std::fs::write(&routed_path, &out)
             .into_diagnostic()
@@ -881,7 +884,10 @@ impl RouteCommand {
                 entry.elapsed_ms as f64 / 1000.0,
             );
         }
-        eprintln!("Chose {}", best.name);
+        // The winner keeps its config's name; whether repair improved on it
+        // is said beside the name rather than folded into it.
+        let repaired = if best.repaired { ", repaired" } else { "" };
+        eprintln!("Chose {}{repaired}", best.name);
 
         // The winner's own count of what it gave up on. This used to be
         // `RoutingResult::complete` whatever the winner left, so the default
@@ -897,8 +903,36 @@ impl RouteCommand {
         };
         Ok((
             result,
-            format!("best of {} variants, `{}`", results.len(), best.name),
+            format!(
+                "best of {} variants, `{}`{repaired}",
+                results.len(),
+                best.name
+            ),
         ))
+    }
+}
+
+/// Run the checker's rules on a board read back from the file `route` wrote,
+/// and say what it found in the words both routes out of here use.
+fn say_what_the_checker_finds(world: &mut BoardWorld, preset: &cypcb_rules::presets::RulesPreset) {
+    use cypcb_drc::PresetRules;
+    let report = cypcb_drc::run_drc(world, &preset.rules());
+    let shorts = cypcb_drc::shorts(&report.violations);
+    // The table goes in the line: a count means nothing without the rules it
+    // was counted against, and `check` has always said which.
+    if shorts > 0 {
+        eprintln!(
+            "DRC on the routed board: {} violations against {}, {} of them copper touching copper",
+            report.violations.len(),
+            preset.name(),
+            shorts
+        );
+    } else {
+        eprintln!(
+            "DRC on the routed board: {} violations against {}, none of them touching",
+            report.violations.len(),
+            preset.name()
+        );
     }
 }
 

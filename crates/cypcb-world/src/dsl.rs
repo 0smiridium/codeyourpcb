@@ -23,6 +23,7 @@
 //! off when the via goes through, which is what a via with no stated pair
 //! means.
 
+use crate::in_build_order;
 use std::collections::BTreeMap;
 use std::fmt::Write;
 
@@ -69,19 +70,31 @@ fn format_number(value: f64) -> String {
     }
 }
 
+/// A value with the tolerance it was stated with: `10kohm +/- 5%`,
+/// `3.3V +/- 0.1V`, `100nF to 220nF`.
+///
+/// The tolerance was once thought to have no written form, and the writer
+/// dropped every assertion carrying one: `examples/v2-constraints.cypcb` went
+/// in with five and came back with two. The grammar reads all three forms.
+fn physical_as_written(value: &cypcb_parser::ast::PhysicalValue) -> String {
+    use cypcb_parser::ast::ToleranceKind;
+    let base = format!("{}{}", format_number(value.value), value.unit);
+    match value.tolerance.as_ref().map(|t| &t.kind) {
+        None => base,
+        Some(ToleranceKind::Percentage { value }) => {
+            format!("{base} +/- {}%", format_number(*value))
+        }
+        Some(ToleranceKind::Absolute(by)) => format!("{base} +/- {}", physical_as_written(by)),
+        Some(ToleranceKind::Range(to)) => format!("{base} to {}", physical_as_written(to)),
+    }
+}
+
 /// One operand of an assertion, or `None` when it cannot be spelled.
 fn assert_operand_as_written(operand: &cypcb_parser::ast::AssertOperand) -> Option<String> {
     use cypcb_parser::ast::AssertOperand;
     match operand {
         AssertOperand::QualifiedName { parts, .. } => Some(parts.join(".")),
-        AssertOperand::Physical(value) => {
-            // A tolerance is part of what a value states and has no form in an
-            // assertion, so a value carrying one is not written back.
-            value
-                .tolerance
-                .is_none()
-                .then(|| format!("{}{}", format_number(value.value), value.unit))
-        }
+        AssertOperand::Physical(value) => Some(physical_as_written(value)),
         AssertOperand::Dimension(dimension) => Some(format!(
             "{}{}",
             format_number(dimension.value),
@@ -102,14 +115,11 @@ fn assert_as_written(expression: &cypcb_parser::ast::AssertExpression) -> Option
             assert_operand_as_written(left)?,
             assert_operand_as_written(right)?
         )),
-        AssertExpression::Within { left, target, .. } => target.tolerance.is_none().then(|| {
-            format!(
-                "assert {} within {}{}",
-                assert_operand_as_written(left).unwrap_or_default(),
-                format_number(target.value),
-                target.unit
-            )
-        }),
+        AssertExpression::Within { left, target, .. } => Some(format!(
+            "assert {} within {}",
+            assert_operand_as_written(left)?,
+            physical_as_written(target)
+        )),
     }
 }
 
@@ -242,18 +252,17 @@ fn traces_as_dsl_filtered(world: &mut BoardWorld, only_routed: bool) -> String {
     );
     let trace_data: Vec<WrittenTrace> = {
         let ecs = world.ecs_mut();
-        let mut query = ecs.query::<(
+        in_build_order::<(
             &Trace,
             Option<&crate::components::trace::TraceNeck>,
             Option<&crate::components::trace::Curve>,
-        )>();
-        query
-            .iter(ecs)
-            .filter(|(trace, _, _)| {
-                !only_routed || trace.source == crate::components::trace::TraceSource::Autorouted
-            })
-            .map(|(trace, neck, curve)| (trace.clone(), neck.copied(), curve.copied()))
-            .collect()
+        )>(ecs)
+        .into_iter()
+        .filter(|(trace, _, _)| {
+            !only_routed || trace.source == crate::components::trace::TraceSource::Autorouted
+        })
+        .map(|(trace, neck, curve)| (trace.clone(), neck.copied(), curve.copied()))
+        .collect()
     };
 
     // Collect all vias grouped by net name, except the ones a stitched pour
@@ -262,20 +271,22 @@ fn traces_as_dsl_filtered(world: &mut BoardWorld, only_routed: bool) -> String {
     // stitching on the next trip through.
     let via_data: Vec<Via> = {
         let ecs = world.ecs_mut();
-        let mut query = ecs.query_filtered::<
-            (&Via, Option<&crate::components::trace::RouterPlaced>),
-            bevy_ecs::prelude::Without<crate::components::Stitched>,
-        >();
         // A via without the mark is one the source declared, locked or not,
         // and it is already in the copy of the source this run appends to.
         // This asked `!via.locked`, which held only while every clear deleted
         // unlocked vias; once the clears kept a declared via, `cypcb route`
         // on `blind-via` wrote its two vias a second time.
-        query
-            .iter(ecs)
-            .filter(|(_, placed)| !only_routed || placed.is_some())
-            .map(|(via, _)| *via)
-            .collect()
+        in_build_order::<(
+            &Via,
+            Option<&crate::components::trace::RouterPlaced>,
+            bevy_ecs::query::Has<crate::components::Stitched>,
+        )>(ecs)
+        .into_iter()
+        .filter(|(_, _, stitched)| !stitched)
+        .map(|(via, placed, _)| (via, placed))
+        .filter(|(_, placed)| !only_routed || placed.is_some())
+        .map(|(via, _)| *via)
+        .collect()
     };
 
     if trace_data.is_empty() && via_data.is_empty() {
@@ -622,12 +633,17 @@ fn zone_as_dsl(
 fn copper_nets(world: &mut BoardWorld) -> Vec<u32> {
     let mut ids: Vec<u32> = {
         let ecs = world.ecs_mut();
-        let mut traces = ecs.query::<&Trace>();
-        traces.iter(ecs).map(|trace| trace.net_id.0).collect()
+        in_build_order::<&Trace>(ecs)
+            .into_iter()
+            .map(|trace| trace.net_id.0)
+            .collect()
     };
     let ecs = world.ecs_mut();
-    let mut vias = ecs.query::<&Via>();
-    ids.extend(vias.iter(ecs).map(|via| via.net_id.0));
+    ids.extend(
+        in_build_order::<&Via>(ecs)
+            .into_iter()
+            .map(|via| via.net_id.0),
+    );
     ids.sort_unstable();
     ids.dedup();
     ids
@@ -858,10 +874,32 @@ fn quoted(text: &str) -> String {
 /// with its value, placement, rotation and side, a `net` block per net listing
 /// the pins on it, and the routed copper through [`traces_as_dsl`].
 ///
-/// Not written, because the language has no syntax for it: copper pours and
-/// keepouts. A board carrying them loses them here, and the writer says so in
-/// a comment at the top of the file rather than dropping them silently.
+/// Pours, keepouts, flex and named regions are written too, and so are the
+/// board's words, measurements, assertions and differential pairs.
+///
+/// What the language cannot say is not dropped in silence: see
+/// [`board_as_dsl_reporting`], which names it.
 pub fn board_as_dsl(world: &mut BoardWorld) -> String {
+    board_as_dsl_reporting(world).source
+}
+
+/// A board written as `.cypcb`, with what the writing could not carry.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct WrittenBoard {
+    /// The design, as text.
+    pub source: String,
+    /// One line per kind of thing the file does not hold, with how many:
+    /// `2 zones not written: ...`. Empty when the file is the whole board.
+    ///
+    /// A person saving a KiCad board as a design believes they have their
+    /// board. Whatever the file leaves out has to reach them, not a comment
+    /// inside a file they are not reading.
+    pub not_written: Vec<String>,
+}
+
+/// [`board_as_dsl`], and the list of what it could not write.
+pub fn board_as_dsl_reporting(world: &mut BoardWorld) -> WrittenBoard {
+    let mut not_written: Vec<String> = Vec::new();
     use crate::components::{
         FootprintRef, NetConnections, Position, RefDes, Rotation, Side, Value,
     };
@@ -881,10 +919,12 @@ pub fn board_as_dsl(world: &mut BoardWorld) -> String {
         connections: Option<NetConnections>,
         /// The catalogue part to buy, when the design named one.
         lcsc: Option<String>,
+        /// What the datasheet says about the part, when the design said it.
+        spec: Option<crate::components::PartSpec>,
     }
     let mut parts: Vec<Part> = {
         let ecs = world.ecs_mut();
-        let mut query = ecs.query::<(
+        in_build_order::<(
             &RefDes,
             &Position,
             &Rotation,
@@ -893,22 +933,23 @@ pub fn board_as_dsl(world: &mut BoardWorld) -> String {
             Option<&NetConnections>,
             Option<&Side>,
             Option<&crate::components::LcscPart>,
-        )>();
-        query
-            .iter(ecs)
-            .map(
-                |(refdes, position, rotation, footprint, value, connections, side, lcsc)| Part {
-                    refdes: refdes.0.clone(),
-                    footprint: footprint.0.clone(),
-                    value: value.map(|v| v.0.clone()).unwrap_or_default(),
-                    position: position.0,
-                    rotation: rotation.0,
-                    on_bottom: matches!(side, Some(Side::Bottom)),
-                    connections: connections.cloned(),
-                    lcsc: lcsc.map(|part| part.0.clone()),
-                },
-            )
-            .collect()
+            Option<&crate::components::PartSpec>,
+        )>(ecs)
+        .into_iter()
+        .map(
+            |(refdes, position, rotation, footprint, value, connections, side, lcsc, spec)| Part {
+                refdes: refdes.0.clone(),
+                footprint: footprint.0.clone(),
+                value: value.map(|v| v.0.clone()).unwrap_or_default(),
+                position: position.0,
+                rotation: rotation.0,
+                on_bottom: matches!(side, Some(Side::Bottom)),
+                connections: connections.cloned(),
+                lcsc: lcsc.map(|part| part.0.clone()),
+                spec: spec.cloned(),
+            },
+        )
+        .collect()
     };
     // Written in the order a person reads them, not in whatever order the ECS
     // happens to hold: a diff between two imports of the same board should be
@@ -925,23 +966,22 @@ pub fn board_as_dsl(world: &mut BoardWorld) -> String {
     );
     let zones: Vec<WrittenZone> = {
         let ecs = world.ecs_mut();
-        let mut query = ecs.query::<(
+        in_build_order::<(
             &crate::components::zone::Zone,
             Option<&crate::components::StitchPitch>,
             Option<&crate::components::BendRadius>,
             Option<&crate::components::Hatch>,
-        )>();
-        query
-            .iter(ecs)
-            .map(|(zone, pitch, radius, hatch)| {
-                (
-                    zone.clone(),
-                    pitch.map(|p| p.0),
-                    radius.map(|r| r.0),
-                    hatch.copied(),
-                )
-            })
-            .collect()
+        )>(ecs)
+        .into_iter()
+        .map(|(zone, pitch, radius, hatch)| {
+            (
+                zone.clone(),
+                pitch.map(|p| p.0),
+                radius.map(|r| r.0),
+                hatch.copied(),
+            )
+        })
+        .collect()
     };
 
     let outline: Option<Vec<cypcb_core::Point>> = world
@@ -1099,12 +1139,25 @@ pub fn board_as_dsl(world: &mut BoardWorld) -> String {
         let _ = writeln!(out);
         let _ = writeln!(out, "footprint {} {{", net_name_as_written(&identifier));
         let (cw, ch) = (footprint.courtyard.width(), footprint.courtyard.height());
-        let _ = writeln!(
+        let _ = write!(
             out,
             "    courtyard {}mm x {}mm",
             format_mm(cw.0 as f64 / 1e6),
             format_mm(ch.0 as f64 / 1e6)
         );
+        // Where it stands, when that is not the origin. A KiCad footprint's
+        // origin is often pin 1, and the size alone read back centred there:
+        // all six KiCad boards in the benchmark moved a courtyard on save.
+        let centre = footprint.courtyard.center();
+        if centre != cypcb_core::Point::ORIGIN {
+            let _ = write!(
+                out,
+                " at {}mm, {}mm",
+                format_mm(centre.x.0 as f64 / 1e6),
+                format_mm(centre.y.0 as f64 / 1e6)
+            );
+        }
+        let _ = writeln!(out);
         for pad in &footprint.pads {
             let shape = match pad.shape {
                 crate::components::PadShape::Circle => "circle",
@@ -1114,10 +1167,19 @@ pub fn board_as_dsl(world: &mut BoardWorld) -> String {
             };
             let _ = write!(
                 out,
-                "    pad {} {shape} at {}mm, {}mm size {}mm x {}mm",
+                "    pad {} {shape} at {}mm, {}mm",
                 pad_name_as_written(&pad.number),
                 format_mm(pad.position.x.0 as f64 / 1e6),
-                format_mm(pad.position.y.0 as f64 / 1e6),
+                format_mm(pad.position.y.0 as f64 / 1e6)
+            );
+            // The pad's turn inside its footprint. Written only when it has
+            // one, so a design whose pads stand square reads as it always has.
+            if pad.rotation != Rotation::ZERO {
+                let _ = write!(out, " rotate {}", pad.rotation.0 as f64 / 1000.0);
+            }
+            let _ = write!(
+                out,
+                " size {}mm x {}mm",
                 format_mm(pad.size.0 .0 as f64 / 1e6),
                 format_mm(pad.size.1 .0 as f64 / 1e6)
             );
@@ -1226,6 +1288,21 @@ pub fn board_as_dsl(world: &mut BoardWorld) -> String {
         if let Some(part_number) = &part.lcsc {
             let _ = writeln!(out, "    lcsc {}", quoted(part_number));
         }
+        // What the datasheet says, which an assertion reads: `assert
+        // U1.output within 3.3V +/- 0.1V` has nothing to measure once the
+        // `spec` block is gone, and the writer used to drop it.
+        if let Some(spec) = part.spec.as_ref().filter(|spec| !spec.entries.is_empty()) {
+            let _ = writeln!(out, "    spec {{");
+            for (name, typed) in &spec.entries {
+                let _ = writeln!(
+                    out,
+                    "        {name} {}{}",
+                    format_number(typed.value),
+                    typed.unit
+                );
+            }
+            let _ = writeln!(out, "    }}");
+        }
         let _ = writeln!(out, "}}");
     }
 
@@ -1333,6 +1410,19 @@ pub fn board_as_dsl(world: &mut BoardWorld) -> String {
     // A pair whose halves cannot be spelled bare is left out with the rest of
     // what this writer cannot say: `diffpair` takes identifiers, and a net
     // called `D+` has no written form here.
+    let unspellable_pairs = world
+        .diff_pairs()
+        .iter()
+        .filter(|pair| {
+            !(is_writable_identifier(&pair.positive.value)
+                && is_writable_identifier(&pair.negative.value))
+        })
+        .count();
+    if unspellable_pairs > 0 {
+        not_written.push(format!(
+            "{unspellable_pairs} diff pair(s) not written: a net name that needs quotes, which diffpair does not take"
+        ));
+    }
     let pairs: Vec<String> = world
         .diff_pairs()
         .iter()
@@ -1360,13 +1450,24 @@ pub fn board_as_dsl(world: &mut BoardWorld) -> String {
     for (zone, stitch, radius, hatch) in &zones {
         out.push_str(&zone_as_dsl(zone, *stitch, *radius, *hatch, &net_names));
     }
+    let unnamed_layers = zones
+        .iter()
+        .filter(|(zone, ..)| !matches!(zone.layer_mask, 0b01 | 0b10 | 0xFFFF_FFFF))
+        .count();
+    if unnamed_layers > 0 {
+        not_written.push(format!(
+            "{unnamed_layers} zone(s) not written: on a set of layers other than top, bottom or all"
+        ));
+    }
 
     // The measurements, before the words: a reader meets the board's size
     // before its labels. Documentation either way - neither reaches copper.
     let dimensions: Vec<crate::components::BoardDimension> = {
         let ecs = world.ecs_mut();
-        let mut query = ecs.query::<&crate::components::BoardDimension>();
-        query.iter(ecs).copied().collect()
+        in_build_order::<&crate::components::BoardDimension>(ecs)
+            .into_iter()
+            .copied()
+            .collect()
     };
     for dimension in &dimensions {
         let _ = writeln!(out, "dimension {{");
@@ -1392,8 +1493,10 @@ pub fn board_as_dsl(world: &mut BoardWorld) -> String {
     // then what is written on top.
     let texts: Vec<crate::components::BoardText> = {
         let ecs = world.ecs_mut();
-        let mut query = ecs.query::<&crate::components::BoardText>();
-        query.iter(ecs).cloned().collect()
+        in_build_order::<&crate::components::BoardText>(ecs)
+            .into_iter()
+            .cloned()
+            .collect()
     };
     for text in &texts {
         let layer = if text.layer == crate::Layer::BottomSilk {
@@ -1414,13 +1517,51 @@ pub fn board_as_dsl(world: &mut BoardWorld) -> String {
         let _ = writeln!(out);
     }
 
+    let off_the_legend = texts
+        .iter()
+        .filter(|text| !matches!(text.layer, crate::Layer::TopSilk | crate::Layer::BottomSilk))
+        .count();
+    if off_the_legend > 0 {
+        not_written.push(format!(
+            "{off_the_legend} text(s) written on the top legend instead of their own layer"
+        ));
+    }
+
+    // A via's ring has no word yet: the reader rebuilds it as twice the drill.
+    // One that had another ring comes back a different via.
+    let (own_ring, autorouted) = {
+        let ecs = world.ecs_mut();
+        let own_ring = in_build_order::<&Via>(ecs)
+            .into_iter()
+            .filter(|via| via.outer_diameter.0 != via.drill.0 * 2)
+            .count();
+        let autorouted = in_build_order::<&Trace>(ecs)
+            .into_iter()
+            .filter(|trace| trace.source == crate::components::trace::TraceSource::Autorouted)
+            .count();
+        (own_ring, autorouted)
+    };
+    if own_ring > 0 {
+        not_written.push(format!(
+            "{own_ring} via(s) written with a ring of twice the drill instead of their own"
+        ));
+    }
+    if autorouted > 0 {
+        not_written.push(format!(
+            "{autorouted} autorouted trace(s) written as drawn by hand"
+        ));
+    }
+
     let traces = traces_as_dsl(world);
     if !traces.is_empty() {
         let _ = writeln!(out);
         out.push_str(&traces);
     }
 
-    out
+    WrittenBoard {
+        source: out,
+        not_written,
+    }
 }
 
 #[cfg(test)]

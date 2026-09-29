@@ -51,6 +51,7 @@ fn board(through_hole: bool) -> (BoardWorld, FootprintLibrary) {
                 vec![Layer::TopCopper]
             },
             mask_margin: None,
+            rotation: Rotation::ZERO,
         }],
         bounds: Rect::from_center_size(Point::ORIGIN, (size, size)),
         courtyard: Rect::from_center_size(Point::ORIGIN, (size, size)),
@@ -73,7 +74,14 @@ fn board(through_hole: bool) -> (BoardWorld, FootprintLibrary) {
 
 fn flashes(through_hole: bool, layer: Layer) -> usize {
     let (mut world, library) = board(through_hole);
-    let gerber = export_copper_layer(&mut world, &library, layer, &FORMAT).unwrap();
+    let gerber = export_copper_layer(
+        &mut world,
+        &library,
+        layer,
+        &FORMAT,
+        cypcb_export::stamp::Stamp::UNIX_EPOCH,
+    )
+    .unwrap();
     gerber.lines().filter(|line| line.ends_with("D03*")).count()
 }
 
@@ -84,7 +92,7 @@ fn ipc2581_pad_layers(through_hole: bool) -> Vec<String> {
         &mut world,
         &library,
         HouseTolerances::default(),
-        "2026-09-25T00:00:00Z",
+        cypcb_export::stamp::Stamp::UNIX_EPOCH,
     );
     xml.split("<LayerFeature layerRef=\"")
         .skip(1)

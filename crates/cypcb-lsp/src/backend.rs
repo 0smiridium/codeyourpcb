@@ -3,7 +3,7 @@
 //! The Backend struct holds all server state and implements the tower-lsp
 //! LanguageServer trait for handling LSP requests and notifications.
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use dashmap::DashMap;
 use tower_lsp::jsonrpc::Result;
@@ -13,16 +13,16 @@ use tower_lsp::lsp_types::{
     DidChangeTextDocumentParams, DidCloseTextDocumentParams, DidOpenTextDocumentParams,
     DidSaveTextDocumentParams, GotoDefinitionParams, GotoDefinitionResponse, Hover, HoverContents,
     HoverParams, HoverProviderCapability, InitializeParams, InitializeResult, InitializedParams,
-    InsertTextFormat, MarkedString, NumberOrString, Position, Range, SaveOptions,
-    ServerCapabilities, ServerInfo, TextDocumentSyncCapability, TextDocumentSyncKind,
-    TextDocumentSyncOptions, TextDocumentSyncSaveOptions, Uri,
+    InsertTextFormat, MarkedString, MessageType, NumberOrString, Position, PositionEncodingKind,
+    Range, SaveOptions, ServerCapabilities, ServerInfo, TextDocumentSyncCapability,
+    TextDocumentSyncKind, TextDocumentSyncOptions, TextDocumentSyncSaveOptions, Uri,
 };
 use tower_lsp::{Client, LanguageServer};
 use tracing::{debug, info};
 
-use crate::completion::{completion_at_position, CompletionItemKind};
+use crate::completion::{completion_at_position, unread_index_at, CompletionItemKind};
 use crate::diagnostics::run_diagnostics;
-use crate::document::DocumentState;
+use crate::document::{DocumentState, Encoding};
 use crate::goto::goto_definition;
 use crate::hover::hover_at_position;
 
@@ -32,6 +32,24 @@ pub struct Backend {
     client: Client,
     /// Open documents indexed by URI.
     documents: Arc<DashMap<Uri, DocumentState>>,
+    /// The position encoding agreed in `initialize`; UTF-16 until then.
+    encoding: OnceLock<Encoding>,
+}
+
+/// The position encoding to use with a client that offers `offered`.
+///
+/// LSP 3.17, `ServerCapabilities.positionEncoding`: "The position encoding
+/// the server picked from the encodings offered by the client via the client
+/// capability `general.positionEncodings`. If the client didn't provide any
+/// position encodings the only valid value that a server can return is
+/// 'utf-16'. If omitted it defaults to 'utf-16'." UTF-8 is taken when offered
+/// because it is what the text is stored in; anything else is UTF-16, which
+/// every client speaks.
+pub fn negotiate(offered: Option<&[PositionEncodingKind]>) -> Encoding {
+    match offered {
+        Some(offered) if offered.contains(&PositionEncodingKind::UTF8) => Encoding::Utf8,
+        _ => Encoding::Utf16,
+    }
 }
 
 impl Backend {
@@ -40,7 +58,13 @@ impl Backend {
         Backend {
             client,
             documents: Arc::new(DashMap::new()),
+            encoding: OnceLock::new(),
         }
+    }
+
+    /// The position encoding this connection agreed on.
+    fn encoding(&self) -> Encoding {
+        self.encoding.get().copied().unwrap_or_default()
     }
 
     /// Parse a document and update its state.
@@ -99,11 +123,22 @@ impl Backend {
 }
 
 impl LanguageServer for Backend {
-    async fn initialize(&self, _params: InitializeParams) -> Result<InitializeResult> {
+    async fn initialize(&self, params: InitializeParams) -> Result<InitializeResult> {
         info!("CodeYourPCB LSP initializing");
+
+        let offered = params
+            .capabilities
+            .general
+            .as_ref()
+            .and_then(|general| general.position_encodings.as_deref());
+        let encoding = *self.encoding.get_or_init(|| negotiate(offered));
 
         Ok(InitializeResult {
             capabilities: ServerCapabilities {
+                position_encoding: Some(match encoding {
+                    Encoding::Utf8 => PositionEncodingKind::UTF8,
+                    Encoding::Utf16 => PositionEncodingKind::UTF16,
+                }),
                 // Full document sync - we receive the entire document on changes
                 text_document_sync: Some(TextDocumentSyncCapability::Options(
                     TextDocumentSyncOptions {
@@ -156,7 +191,8 @@ impl LanguageServer for Backend {
         debug!("Document opened: {:?}", uri);
 
         // Create document state
-        let doc = DocumentState::new(uri.to_string(), content, version);
+        let mut doc = DocumentState::new(uri.to_string(), content, version);
+        doc.encoding = self.encoding();
         self.documents.insert(uri.clone(), doc);
 
         // Parse and build world
@@ -266,6 +302,11 @@ impl LanguageServer for Backend {
 
             // Get completions from our implementation
             let items = completion_at_position(&doc, &our_position);
+            let unread = unread_index_at(&doc, &our_position);
+            drop(doc);
+            if let Some(why) = unread {
+                self.client.log_message(MessageType::WARNING, why).await;
+            }
 
             if items.is_empty() {
                 return Ok(None);
@@ -284,11 +325,12 @@ impl LanguageServer for Backend {
                         CompletionItemKind::Snippet => LspCompletionItemKind::SNIPPET,
                     };
 
-                    let insert_text_format = if item.is_snippet {
-                        Some(InsertTextFormat::SNIPPET)
-                    } else {
-                        Some(InsertTextFormat::PLAIN_TEXT)
-                    };
+                    // Plain text is what a client assumes when the format is
+                    // left out, so only a snippet says it. Written on every
+                    // item it was a fifth of a completion over an index of
+                    // ten thousand names, which the server serialises and
+                    // the client parses on each request.
+                    let insert_text_format = item.is_snippet.then_some(InsertTextFormat::SNIPPET);
 
                     LspCompletionItem {
                         label: item.label,

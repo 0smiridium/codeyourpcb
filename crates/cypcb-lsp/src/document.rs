@@ -10,10 +10,38 @@ use cypcb_parser::{ImportError, ParseError};
 use cypcb_world::{BoardWorld, SyncError};
 
 /// Position in a document (LSP-style, 0-indexed).
+///
+/// `character` counts in the document's [`Encoding`], not in `char`s.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Position {
     pub line: u32,
     pub character: u32,
+}
+
+/// What a [`Position::character`] counts along a line.
+///
+/// LSP 3.17, `PositionEncodingKind.UTF16`: "Character offsets count UTF-16
+/// code units. This is the default and must always be supported by servers".
+/// The server counted `char`s and negotiated nothing, so on a line holding an
+/// emoji - one `char`, two UTF-16 units, four UTF-8 bytes - every column after
+/// it was off by one for the editor and by three for a client speaking UTF-8.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Encoding {
+    /// UTF-8 code units, i.e. bytes.
+    Utf8,
+    /// UTF-16 code units: the protocol's default.
+    #[default]
+    Utf16,
+}
+
+impl Encoding {
+    /// How many units of this encoding `ch` takes.
+    fn units(self, ch: char) -> u32 {
+        match self {
+            Encoding::Utf8 => ch.len_utf8() as u32,
+            Encoding::Utf16 => ch.len_utf16() as u32,
+        }
+    }
 }
 
 /// The filesystem path a document URI names, when it names one.
@@ -64,6 +92,9 @@ pub struct DocumentState {
     /// it says while it does. Byte offsets, converted to a range when the
     /// diagnostic is built.
     pub fab_fallback: Option<UnknownFab>,
+
+    /// The table the last check used, as `cypcb check` names it.
+    pub checked_against: Option<cypcb_drc::Preset>,
     /// Where this document lives, when it lives anywhere.
     ///
     /// `import "lib/blocks.cypcb"` resolves against the importing file's own
@@ -72,6 +103,11 @@ pub struct DocumentState {
     /// and was dropped - which is why a design split across files came up
     /// empty in the editor and checked fine on the command line.
     pub path: Option<PathBuf>,
+    /// What a position's `character` counts, as the client and server agreed
+    /// in `initialize`. Every position in and out goes through
+    /// [`DocumentState::offset_to_position`] and
+    /// [`DocumentState::position_to_offset`], which read it.
+    pub encoding: Encoding,
 }
 
 /// A `fab` name the tool does not have, and where it was written.
@@ -96,7 +132,9 @@ impl DocumentState {
             sync_errors: Vec::new(),
             import_errors: Vec::new(),
             fab_fallback: None,
+            checked_against: None,
             path: path_of(&uri),
+            encoding: Encoding::default(),
         }
     }
 
@@ -111,6 +149,7 @@ impl DocumentState {
         self.sync_errors.clear();
         self.import_errors.clear();
         self.fab_fallback = None;
+        self.checked_against = None;
     }
 
     /// Parse the document content and update AST and errors.
@@ -150,34 +189,32 @@ impl DocumentState {
         };
 
         let mut world = BoardWorld::new();
-        let mut library = FootprintLibrary::new();
+        let mut library = match &self.path {
+            Some(path) => cypcb_library::design::footprint_library_for(&resolved, path),
+            None => FootprintLibrary::new(),
+        };
         let sync_result = sync_ast_to_world(&resolved, &self.content, &mut world, &mut library);
         self.sync_errors = sync_result.errors.clone();
 
-        // Run DRC against the fab the board named, which is the same question
-        // `cypcb check` and the browser both ask. This was `DesignRules::default()`
-        // - JLCPCB - on every document, so a board written `fab oshpark` was
-        // underlined in the editor against a table it was never meant for.
+        // Run DRC against the table `cypcb check` uses for this board: the
+        // board's fab, JLCPCB when it names none, each for the board's layer
+        // count. The choice is `cypcb_drc::table_for_editor`, the one the
+        // command line and the browser read, so the three cannot drift apart.
         //
         // A name this tool does not have falls back rather than failing, the way
         // the viewer does: a language server that stops reporting anything
         // because one word is wrong is worse than one checking against the
-        // default. Unlike the viewer, nothing here says so yet - recorded.
-        self.fab_fallback = None;
-        let preset = match world.fab() {
-            Some(named) => cypcb_drc::Preset::from_name(named).unwrap_or_else(|| {
-                self.fab_fallback = Some(UnknownFab {
-                    named: named.to_string(),
-                    span: resolved
-                        .board()
-                        .and_then(|board| board.fab.as_ref())
-                        .map(|fab| (fab.span.start, fab.span.end))
-                        .unwrap_or((0, 0)),
-                });
-                cypcb_drc::Preset::JlcpcbStandard2Layer
-            }),
-            None => cypcb_drc::Preset::JlcpcbStandard2Layer,
-        };
+        // default. The fallback is reported on the line that wrote the name.
+        let (preset, unknown) = cypcb_drc::table_for_editor(&world);
+        self.fab_fallback = unknown.map(|unknown| UnknownFab {
+            named: unknown.name,
+            span: resolved
+                .board()
+                .and_then(|board| board.fab.as_ref())
+                .map(|fab| (fab.span.start, fab.span.end))
+                .unwrap_or((0, 0)),
+        });
+        self.checked_against = Some(preset);
         let rules = preset.rules();
         let drc_result = run_drc(&mut world, &rules);
         self.drc_violations = drc_result.violations;
@@ -186,7 +223,8 @@ impl DocumentState {
         sync_result.is_ok()
     }
 
-    /// Convert a byte offset to a Position.
+    /// Convert a byte offset to a Position, counting columns in
+    /// [`DocumentState::encoding`].
     pub fn offset_to_position(&self, offset: usize) -> Position {
         let mut line = 0u32;
         let mut col = 0u32;
@@ -200,7 +238,7 @@ impl DocumentState {
                 line += 1;
                 col = 0;
             } else {
-                col += 1;
+                col += self.encoding.units(ch);
             }
             current_offset += ch.len_utf8();
         }
@@ -211,30 +249,31 @@ impl DocumentState {
         }
     }
 
-    /// Convert a Position to a byte offset.
+    /// Convert a Position to a byte offset, reading its column in
+    /// [`DocumentState::encoding`].
+    ///
+    /// A column past the end of its line means the end of that line, as LSP
+    /// 3.17 says of `Position.character`. A column inside a character - the
+    /// second half of a surrogate pair, a byte in the middle of a UTF-8
+    /// sequence - means that character.
     pub fn position_to_offset(&self, position: &Position) -> Option<usize> {
         let mut current_line = 0u32;
         let mut current_col = 0u32;
         let mut offset = 0usize;
 
         for ch in self.content.chars() {
-            if current_line == position.line && current_col == position.character {
+            if current_line == position.line
+                && (ch == '\n' || current_col + self.encoding.units(ch) > position.character)
+            {
                 return Some(offset);
             }
             if ch == '\n' {
-                if current_line == position.line {
-                    return Some(offset);
-                }
                 current_line += 1;
                 current_col = 0;
             } else {
-                current_col += 1;
+                current_col += self.encoding.units(ch);
             }
             offset += ch.len_utf8();
-        }
-
-        if current_line == position.line && current_col == position.character {
-            return Some(offset);
         }
 
         if current_line == position.line {

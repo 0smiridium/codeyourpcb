@@ -177,6 +177,77 @@ export class PcbEngine {
         }
     }
     /**
+     * The whole board as a `.cypcb` design - the text `from-kicad` writes.
+     *
+     * A KiCad board is saved as a design of this language, beside the file it
+     * came from and never over it: the importer does not carry everything a
+     * `.kicad_pcb` holds, so writing the board back as KiCad would lose what
+     * it drops, and splicing trace blocks onto the KiCad text lost the copper.
+     * @returns {string}
+     */
+    design_as_dsl() {
+        let deferred1_0;
+        let deferred1_1;
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.pcbengine_design_as_dsl(retptr, this.__wbg_ptr);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            deferred1_0 = r0;
+            deferred1_1 = r1;
+            return getStringFromWasm0(r0, r1);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+            wasm.__wbindgen_export4(deferred1_0, deferred1_1, 1);
+        }
+    }
+    /**
+     * What [`Self::design_as_dsl`] cannot write, one line per kind, joined by
+     * newlines: `2 zone(s) not written: ...`. Empty when the design is the
+     * whole board.
+     *
+     * A person who saves a KiCad board as a design believes they have their
+     * board, so what the file leaves out is shown to them, not left in it.
+     * @returns {string}
+     */
+    design_not_written() {
+        let deferred1_0;
+        let deferred1_1;
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.pcbengine_design_not_written(retptr, this.__wbg_ptr);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            deferred1_0 = r0;
+            deferred1_1 = r1;
+            return getStringFromWasm0(r0, r1);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+            wasm.__wbindgen_export4(deferred1_0, deferred1_1, 1);
+        }
+    }
+    /**
+     * The table the board is checked against, named as `cypcb check` names
+     * it after "against", so the status can say what the count is measured by.
+     * @returns {string}
+     */
+    drc_table() {
+        let deferred1_0;
+        let deferred1_1;
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.pcbengine_drc_table(retptr, this.__wbg_ptr);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            deferred1_0 = r0;
+            deferred1_1 = r1;
+            return getStringFromWasm0(r0, r1);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+            wasm.__wbindgen_export4(deferred1_0, deferred1_1, 1);
+        }
+    }
+    /**
      * Export all traces and vias as DSL `trace` blocks.
      *
      * Iterates all Trace and Via entities in the ECS, groups them by net,
@@ -269,9 +340,10 @@ export class PcbEngine {
     /**
      * Get the last check's DRC violations as JSON.
      *
-     * This is the rule's own report: one entry per pair of features the
-     * clearance rule put in fault, which is one entry per pair of segments
-     * where two features touch along a run. The reading is grouped by contact
+     * This is the rule's own report: one entry per place the clearance rule
+     * put in fault - one unbroken run of a trace too close to one pad, via or
+     * other net's trace - so a pair of features in fault at two separate
+     * places is two entries. The reading is grouped by contact
      * where it is shown - `cypcb check`, the language server and the viewer's
      * error panel all do that - and the count here stays as the rule made it.
      *
@@ -319,6 +391,40 @@ export class PcbEngine {
             const ptr0 = passStringToWasm0(source, wasm.__wbindgen_export, wasm.__wbindgen_export2);
             const len0 = WASM_VECTOR_LEN;
             wasm.pcbengine_load_kicad(retptr, this.__wbg_ptr, ptr0, len0);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            deferred2_0 = r0;
+            deferred2_1 = r1;
+            return getStringFromWasm0(r0, r1);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+            wasm.__wbindgen_export4(deferred2_0, deferred2_1, 1);
+        }
+    }
+    /**
+     * Put the routes of a Specctra session file on the board.
+     *
+     * The routes a server router sent back, or a `.ses` file the user opened,
+     * used to go into the viewer's copy of the board only: the engine never
+     * held them, so the ratsnest was worked out a second time in TypeScript
+     * and the checker did not see the copper at all. They now land in the
+     * world, as the FreeRouting runner puts them there, and the ratsnest and
+     * the violations come back from the engine like any other copper. The
+     * host writes them into the design with `export_traces_as_dsl`.
+     *
+     * Autorouted copper already on the board is cleared first. Returns an
+     * empty string on success, or what went wrong.
+     * @param {string} ses
+     * @returns {string}
+     */
+    load_ses(ses) {
+        let deferred2_0;
+        let deferred2_1;
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passStringToWasm0(ses, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len0 = WASM_VECTOR_LEN;
+            wasm.pcbengine_load_ses(retptr, this.__wbg_ptr, ptr0, len0);
             var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
             var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
             deferred2_0 = r0;

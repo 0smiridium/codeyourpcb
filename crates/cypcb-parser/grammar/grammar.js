@@ -659,7 +659,7 @@ module.exports = grammar({
       field('text', $.string),
     ),
 
-    // pad N shape at X, Y size W x H [drill D]
+    // pad N shape at X, Y [rotate A] size W x H [drill D]
     // pad 1 ... / pad A1 ... / pad "S1" ...
     //
     // A pad's name is a name, not a count. A USB-C receptacle names its pads
@@ -675,6 +675,12 @@ module.exports = grammar({
       field('x', $.dimension),
       ',',
       field('y', $.dimension),
+      // `rotate 90` turns the pad inside its footprint, the way `rotate` turns
+      // a part on the board. A connector's pads often stand across the part
+      // rather than along it, and without this the only way to write one was
+      // to swap its width and height - which is a different pad the moment
+      // it has a slot or a corner that is not square.
+      optional(field('rotation', $.rotation_property)),
       'size',
       field('width', $.dimension),
       'x',
@@ -712,12 +718,22 @@ module.exports = grammar({
 
     pad_shape: $ => choice('rect', 'circle', 'roundrect', 'oblong'),
 
-    // courtyard W x H
+    // courtyard W x H [at X, Y]
+    //
+    // Centred on the footprint's origin unless `at` says where its centre is.
+    // A KiCad footprint's origin is often pin 1, not the middle of the part,
+    // and a courtyard written without its place came back centred on pin 1.
     courtyard_property: $ => seq(
       'courtyard',
       field('width', $.dimension),
       'x',
       field('height', $.dimension),
+      optional(seq(
+        'at',
+        field('x', $.dimension),
+        ',',
+        field('y', $.dimension),
+      )),
     ),
 
     // zone NAME { ... }, keepout NAME { ... }, flex NAME { ... } or

@@ -54,6 +54,24 @@ pub enum KicadPcbError {
     #[error("S-expression parse error: {0}")]
     SexprParseError(String),
 
+    /// Something follows the board's closing parenthesis.
+    ///
+    /// A `.kicad_pcb` is one `(kicad_pcb ...)` and nothing after it. The
+    /// S-expression reader stops at the first closing parenthesis and ignores
+    /// the rest, so a board with a design appended to it - what the viewer's
+    /// save once wrote - read as the board alone, with its copper gone and no
+    /// error.
+    #[error(
+        "text after the board's closing parenthesis at line {line}, column {column}: \
+         a .kicad_pcb holds one (kicad_pcb ...) and nothing after it"
+    )]
+    TrailingContent {
+        /// One-based line of the first character after the board.
+        line: usize,
+        /// One-based column of that character, in characters.
+        column: usize,
+    },
+
     /// Required field missing from the PCB file.
     #[error("Missing field '{field}' in {context}")]
     MissingField {
@@ -282,6 +300,50 @@ pub fn parse_kicad_pcb(path: &Path) -> Result<KicadPcbParseResult, KicadPcbError
     parse_kicad_pcb_str(&content)
 }
 
+/// Refuse a file with anything but whitespace after its first expression.
+///
+/// Strings are skipped with their escapes, so a `)` inside a property value
+/// does not end the board early. An expression that never closes is left for
+/// the S-expression reader to report.
+fn refuse_trailing_content(content: &str) -> Result<(), KicadPcbError> {
+    let mut depth = 0usize;
+    let mut in_string = false;
+    let mut escaped = false;
+    let mut end = None;
+    for (at, c) in content.char_indices() {
+        if in_string {
+            match (escaped, c) {
+                (true, _) => escaped = false,
+                (false, '\\') => escaped = true,
+                (false, '"') => in_string = false,
+                _ => {}
+            }
+            continue;
+        }
+        match c {
+            '"' => in_string = true,
+            '(' => depth += 1,
+            ')' if depth > 0 => {
+                depth -= 1;
+                if depth == 0 {
+                    end = Some(at + 1);
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    let Some(end) = end else { return Ok(()) };
+    let rest = &content[end..];
+    let Some(offset) = rest.find(|c: char| !c.is_whitespace()) else {
+        return Ok(());
+    };
+    let before = &content[..end + offset];
+    let line = before.matches('\n').count() + 1;
+    let column = before.rsplit('\n').next().map_or(0, |l| l.chars().count()) + 1;
+    Err(KicadPcbError::TrailingContent { line, column })
+}
+
 /// Parse a KiCad PCB from a string.
 ///
 /// This is the core parser. It:
@@ -295,6 +357,8 @@ pub fn parse_kicad_pcb(path: &Path) -> Result<KicadPcbParseResult, KicadPcbError
 ///
 /// Returns a [`KicadPcbError`] variant describing the failure.
 pub fn parse_kicad_pcb_str(content: &str) -> Result<KicadPcbParseResult, KicadPcbError> {
+    refuse_trailing_content(content)?;
+
     // Parse S-expression tree
     let sexp = symbolic_expressions::parser::parse_str(content)
         .map_err(|e| KicadPcbError::SexprParseError(format!("{}", e)))?;
@@ -1138,6 +1202,7 @@ fn resolve_library_key(library: &FootprintLibrary, name: &str, pads: &[PadDef]) 
                     && a.size == b.size
                     && a.drill == b.drill
                     && a.layers == b.layers
+                    && a.rotation == b.rotation
             })
     };
 
@@ -1272,6 +1337,9 @@ fn parse_footprint(
         }
     }
 
+    // Degrees to millidegrees.
+    let rotation = Rotation((angle * 1000.0).round() as i32);
+
     let pad_defs: Vec<PadDef> = pads
         .iter()
         .map(|p| PadDef {
@@ -1283,6 +1351,14 @@ fn parse_footprint(
             slot: p.slot,
             layers: p.layers.clone(),
             mask_margin: None,
+            // "The pad angle in the file is a board frame absolute value. If
+            // it is missing, the pad is axis aligned regardless of the parent
+            // footprint orientation" - KiCad's board reader,
+            // `pcb_io_kicad_sexpr_parser.cpp` at a62d8cd4 (read 2026-09-26).
+            // The footprint keeps a pad's turn inside itself, so the part's
+            // turn comes off. A pad with no angle on a turned part is turned
+            // back by the part's turn, which is what "axis aligned" means.
+            rotation: Rotation((p.angle.0 - rotation.0).rem_euclid(360_000)),
         })
         .collect();
 
@@ -1337,9 +1413,6 @@ fn parse_footprint(
     // Convert position mm → nm, translating from absolute KiCad coords
     // to board-relative coords, Y up, from the board's bottom-left corner
     let position = Position(frame::board_point(board_origin_mm, pos_x, pos_y));
-    // Convert angle degrees → millidegrees
-    let rotation = Rotation((angle * 1000.0).round() as i32);
-
     // Use refdes if available, otherwise generate one
     let refdes = if refdes_str.is_empty() {
         RefDes::new("??")
@@ -1378,6 +1451,11 @@ pub(crate) struct ParsedPad {
     pub(crate) mask_margin: Option<Nm>,
     /// The shape the file stated, when this importer had no word for it.
     pub(crate) approximated_from: Option<String>,
+    /// The third number of the pad's `(at x y angle)`, `ZERO` when the file
+    /// writes none. In a footprint file it is the pad's turn inside its
+    /// footprint; in a board file it is the pad's turn on the board, and the
+    /// board reader takes the part's turn off it.
+    pub(crate) angle: Rotation,
 }
 
 /// The corner a `roundrect` pad states, as a percentage of its short side.
@@ -1453,6 +1531,7 @@ pub(crate) fn parse_pad(
     let mut layers: Vec<Layer> = Vec::new();
     let mut net_id: Option<NetId> = None;
     let mut mask_margin: Option<Nm> = None;
+    let mut angle = Rotation::ZERO;
 
     for prop in &elements[3..] {
         if let Some(name) = list_name(prop) {
@@ -1463,6 +1542,10 @@ pub(crate) fn parse_pad(
                             let x = coordinate(&list[1], "pad position x")?;
                             let y = coordinate(&list[2], "pad position y")?;
                             local_pos = frame::local_point(x, y);
+                        }
+                        if list.len() >= 4 {
+                            let degrees = coordinate(&list[3], "pad angle")?;
+                            angle = Rotation((degrees * 1000.0).round() as i32);
                         }
                     }
                 }
@@ -1570,6 +1653,7 @@ pub(crate) fn parse_pad(
         net_id,
         mask_margin,
         approximated_from,
+        angle,
     }))
 }
 
@@ -2162,6 +2246,11 @@ pub fn parse_layer_name(name: &str) -> Option<Layer> {
 /// Appends matching layers to the `layers` vec.
 fn parse_layer_names(name: &str, layers: &mut Vec<Layer>) {
     match name {
+        // KiCad's "all of the copper layers". The list only has the two faces
+        // to name, because this reader does not know the layer count; the
+        // copper a plated pad has on the inner layers comes from
+        // `PadDef::copper_mask`, not from this list, and every reader of pad
+        // copper asks that.
         "*.Cu" => {
             layers.push(Layer::TopCopper);
             layers.push(Layer::BottomCopper);
@@ -2245,8 +2334,10 @@ fn calculate_pad_bounds(pads: &[PadDef]) -> Rect {
     let mut max_y = i64::MIN;
 
     for pad in pads {
-        let half_w = pad.size.0 .0 / 2;
-        let half_h = pad.size.1 .0 / 2;
+        // Its sides along the footprint's axes, once its own turn is taken up.
+        let (width, height) = pad.outline(Point::ORIGIN, Rotation::ZERO).size;
+        let half_w = width.0 / 2;
+        let half_h = height.0 / 2;
 
         min_x = min_x.min(pad.position.x.0 - half_w);
         min_y = min_y.min(pad.position.y.0 - half_h);

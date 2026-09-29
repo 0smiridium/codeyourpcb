@@ -30,4 +30,21 @@ pub enum LibraryError {
     /// Library or component not found
     #[error("Not found: {0}")]
     NotFound(String),
+
+    /// A component the index did not write, with the reason
+    #[error("{0}")]
+    NotIndexed(String),
+
+    /// A bare name that more than one library holds, with each one written
+    /// in full
+    #[error(
+        "'{written}' is in more than one library: {}; write the one you mean",
+        .candidates.join(", ")
+    )]
+    Ambiguous {
+        /// The name as the design wrote it.
+        written: String,
+        /// Every component it could mean, as `source::library:name`.
+        candidates: Vec<String>,
+    },
 }

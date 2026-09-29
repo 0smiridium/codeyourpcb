@@ -113,14 +113,36 @@ The flag still wins when it is given, so a question about a specific fab is not
 overridden by the file. A board that names none is checked against JLCPCB, which
 is what this project has always defaulted to.
 
+A house publishes one table per layer count, so a house name follows the board's
+`layers`. JLCPCB, standard and advanced, and OSHPark have a four-layer table;
+PCBWay, the IPC classes and `prototype` have one table for every layer count. A
+name that states its layer count, such as `--preset jlcpcb_standard_2layer`, is
+taken as written.
+
+| Board says | Checked against |
+|---|---|
+| `layers 2` | `jlcpcb_standard_2layer` |
+| `layers 4` | `jlcpcb_standard_4layer` |
+| `layers 4`, `fab jlcpcb` | `jlcpcb_standard_4layer` |
+| `layers 2`, `fab oshpark` | `oshpark_2layer` |
+| `layers 4`, `fab oshpark` | `oshpark_4layer` |
+| `layers 4`, `fab pcbway` | `pcbway_standard` |
+| `layers 4`, `fab jlpcb` | `jlcpcb_standard_4layer`, with a warning in the editors; `cypcb check` refuses the name |
+
 `cypcb export` reads it always. Its own `--house` answers a different question
 - what a fabricator wants the files called - so it has no say in which rules the
 board is checked against on the way out.
 
-The editor and the language server read it too, and neither can refuse a name it
-does not have, because both still have to show you the board. They fall back to
-JLCPCB and say so: the viewer as a diagnostic on the word, the server as a
-warning underlining it.
+The browser editor and the language server read it too, through the function
+the command line calls (`cypcb_drc::table_for`), so the three check a board
+against the same table. Neither editor can refuse a name it does not have,
+because both still have to show you the board. They fall back to JLCPCB for the
+board's layer count and say so: the viewer as a diagnostic on the word, the
+server as a warning underlining it. `cypcb check` names the table after
+"against"; the viewer's status bar reads `DRC against` and the table.
+`crates/cypcb-cli/tests/three_surfaces_check_against_one_table.rs` holds the three
+to one table, and `crates/cypcb-lsp/tests/the_manual_matches_the_server.rs` holds
+the table above to what the language server does.
 
 Run `cypcb check --preset ?` against any board to see the names, or read them
 off a refusal: an unknown fab is reported with the full list, and the message
@@ -1142,7 +1164,7 @@ Define custom footprints inline:
 ```
 footprint <name> {
     description "<text>"
-    courtyard <width> x <height>
+    courtyard <width> x <height> [at <x>, <y>]
     pad <number> <shape> at <x>, <y> size <w> x <h> [drill <d> [x <d2>]] [corner <n>%] [mask <m>]
     silk line <x>, <y> to <x>, <y> [width <w>]
     silk circle <x>, <y> radius <r> [width <w>]
@@ -1161,6 +1183,24 @@ footprint MY_CONNECTOR {
     pad 3 rect at 2mm, 0mm size 1mm x 1.5mm drill 0.8mm
 }
 ```
+
+**Where the courtyard stands.** A courtyard is centred on the footprint's
+origin unless `at` says where its centre is. A KiCad footprint's origin is
+often pin 1 rather than the middle of the part, so a pin header whose pins run
+down from its origin states the centre it has:
+
+```
+footprint HEADER_1X03 {
+    courtyard 2.2mm x 7.28mm at 0mm, -2.54mm
+
+    pad 1 rect at 0mm, 0mm size 1.7mm x 1.7mm drill 1mm
+    pad 2 oblong at 0mm, -2.54mm size 1.7mm x 1.7mm drill 1mm
+    pad 3 oblong at 0mm, -5.08mm size 1.7mm x 1.7mm drill 1mm
+}
+```
+
+Without `at` the centre is the origin, which is what every file written
+before `at` existed means.
 
 **Holes: drilled or milled.** One drill number is a round hole. Two are a
 **slot**, milled along its length with a bit the width of its narrow
@@ -1224,6 +1264,17 @@ footprint POLARISED {
   the copper, which is a different board
 - KiCad states this per pad, and a through-hole connector asks for 4 mil so the
   mask does not creep onto copper a hand-soldered joint has to wet
+
+**Turn:**
+- `rotate <a>` after the pad's position turns the pad inside its footprint,
+  the way `rotate` after a part's `at` turns the part on the board:
+  `pad 1 oblong at 0mm, 0mm rotate 90 size 1.524mm x 3.048mm drill 1mm`
+- The size, the slot and the corner are the pad's own, before the turn; the
+  pad above is 3.048mm across the footprint's x axis
+- A pad that states none stands square to its footprint
+- On the board a pad is turned by its own turn plus its part's
+- KiCad writes a pad's angle on the board, part and pad together; `from-kicad`
+  takes the part's angle off it, and `to-kicad` adds it back
 
 **Drill:**
 - If `drill` is specified, pad is through-hole (THT)

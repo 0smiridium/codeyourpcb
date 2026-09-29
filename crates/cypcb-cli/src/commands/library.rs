@@ -85,11 +85,18 @@ impl LibraryCommand {
                 // paths, so the directory being imported has to be one of them.
                 manager.add_kicad_search_path(directory.clone());
 
-                let imported = manager
-                    .auto_import_folder(&directory)
+                let found = manager
+                    .import_folder(&directory)
                     .into_diagnostic()
                     .wrap_err("importing the libraries in that directory")?;
+                let imported = &found.imported;
 
+                for (name, rows) in &found.gone {
+                    println!(
+                        "{name}: {rows} footprint(s) removed from the index: \
+                         its folder {name}.pretty is gone"
+                    );
+                }
                 if imported.is_empty() {
                     println!(
                         "No .pretty folder under {}: a KiCad footprint library is a folder \
@@ -99,16 +106,24 @@ impl LibraryCommand {
                     return Ok(());
                 }
 
-                let libraries = manager.list_libraries().into_diagnostic()?;
+                // The count is what was written, so it equals the rows the
+                // import added or rewrote. A refused footprint is named, and
+                // counted apart.
                 let mut total = 0usize;
-                for name in &imported {
-                    let count = libraries
-                        .iter()
-                        .find(|library| &library.name == name)
-                        .map(|library| library.component_count)
-                        .unwrap_or(0);
-                    total += count;
-                    println!("{name}: {count} footprint(s)");
+                let mut refused = 0usize;
+                for (name, outcome) in imported {
+                    for why in &outcome.rejected {
+                        eprintln!("{why}");
+                    }
+                    total += outcome.written;
+                    refused += outcome.rejected.len();
+                    println!("{name}: {} footprint(s)", outcome.written);
+                    if outcome.removed > 0 {
+                        println!(
+                            "{name}: {} footprint(s) removed from the index: their files are gone",
+                            outcome.removed
+                        );
+                    }
                 }
                 println!(
                     "Indexed {total} footprint(s) from {} librar{} into {}",
@@ -116,6 +131,9 @@ impl LibraryCommand {
                     if imported.len() == 1 { "y" } else { "ies" },
                     path.display()
                 );
+                if refused > 0 {
+                    println!("{refused} footprint(s) not indexed: the reason for each is above");
+                }
             }
 
             LibraryAction::Search(args) => {
@@ -133,13 +151,16 @@ impl LibraryCommand {
                     return Ok(());
                 }
 
+                // The name first, spelled the way a design writes it:
+                // `source::library:name`. A bare name printed here was one a
+                // person copied into a design and saw refused, and two
+                // libraries can hold one name.
                 for result in &results {
                     let component = &result.component;
                     let description = component.metadata.description.as_deref().unwrap_or("");
                     println!(
-                        "{}  [{}]{}{}",
-                        component.id.name,
-                        component.library,
+                        "{}{}{}",
+                        component.full_name(),
                         if description.is_empty() { "" } else { "  " },
                         description
                     );

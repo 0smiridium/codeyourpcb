@@ -17,6 +17,8 @@
 //!
 //! It also gives a test a directory of its own under the machine's temporary
 //! directory, [`scratch_dir`], so two runs of the suite never share one.
+//! And it lists the repository as git tracks it, [`tree`], so a test reads the
+//! files a clone has rather than whatever else lies in the checkout.
 //!
 //! It is a dev-dependency and `publish = false`: nothing that ships links it.
 
@@ -24,6 +26,7 @@ use cypcb_core::Nm;
 use cypcb_world::components::{Stackup, StackupLayer, StackupLayerKind};
 
 mod scratch;
+pub mod tree;
 
 pub use scratch::{scratch_dir, ScratchDir, ScratchPath};
 

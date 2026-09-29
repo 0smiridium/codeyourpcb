@@ -4,7 +4,6 @@
 //! like board name, export date, and total component counts.
 
 use crate::bom::{group_components, BomEntry};
-use chrono::Utc;
 use cypcb_world::BoardWorld;
 use serde::{Deserialize, Serialize};
 
@@ -64,7 +63,7 @@ pub struct BomMetadata {
 ///     NetConnections::new(),
 /// );
 ///
-/// let json = export_bom_json(&mut world, Some("TestBoard")).unwrap();
+/// let json = export_bom_json(&mut world, Some("TestBoard"), cypcb_export::stamp::Stamp::UNIX_EPOCH).unwrap();
 /// assert!(json.contains("TestBoard"));
 /// assert!(json.contains("\"unique_components\": 1"));
 /// assert!(json.contains("\"total_components\": 1"));
@@ -72,6 +71,7 @@ pub struct BomMetadata {
 pub fn export_bom_json(
     world: &mut BoardWorld,
     board_name: Option<&str>,
+    stamp: crate::stamp::Stamp,
 ) -> Result<String, serde_json::Error> {
     let bom = group_components(world);
 
@@ -81,7 +81,7 @@ pub fn export_bom_json(
     let doc = BomDocument {
         metadata: BomMetadata {
             board_name: board_name.unwrap_or("board").to_string(),
-            export_date: Utc::now().to_rfc3339(),
+            export_date: stamp.to_rfc3339(),
             unique_components,
             total_components,
         },
@@ -99,7 +99,12 @@ mod tests {
     #[test]
     fn test_export_bom_json_empty() {
         let mut world = BoardWorld::new();
-        let json = export_bom_json(&mut world, Some("TestBoard")).unwrap();
+        let json = export_bom_json(
+            &mut world,
+            Some("TestBoard"),
+            crate::stamp::Stamp::UNIX_EPOCH,
+        )
+        .unwrap();
 
         // Parse to verify structure
         let doc: BomDocument = serde_json::from_str(&json).unwrap();
@@ -121,7 +126,12 @@ mod tests {
             NetConnections::new(),
         );
 
-        let json = export_bom_json(&mut world, Some("TestBoard")).unwrap();
+        let json = export_bom_json(
+            &mut world,
+            Some("TestBoard"),
+            crate::stamp::Stamp::UNIX_EPOCH,
+        )
+        .unwrap();
 
         let doc: BomDocument = serde_json::from_str(&json).unwrap();
         assert_eq!(doc.metadata.unique_components, 1);
@@ -151,7 +161,12 @@ mod tests {
             NetConnections::new(),
         );
 
-        let json = export_bom_json(&mut world, Some("TestBoard")).unwrap();
+        let json = export_bom_json(
+            &mut world,
+            Some("TestBoard"),
+            crate::stamp::Stamp::UNIX_EPOCH,
+        )
+        .unwrap();
 
         let doc: BomDocument = serde_json::from_str(&json).unwrap();
         assert_eq!(doc.metadata.unique_components, 1);
@@ -188,7 +203,12 @@ mod tests {
             NetConnections::new(),
         );
 
-        let json = export_bom_json(&mut world, Some("TestBoard")).unwrap();
+        let json = export_bom_json(
+            &mut world,
+            Some("TestBoard"),
+            crate::stamp::Stamp::UNIX_EPOCH,
+        )
+        .unwrap();
 
         let doc: BomDocument = serde_json::from_str(&json).unwrap();
         assert_eq!(doc.metadata.unique_components, 2);
@@ -208,7 +228,7 @@ mod tests {
             NetConnections::new(),
         );
 
-        let json = export_bom_json(&mut world, None).unwrap();
+        let json = export_bom_json(&mut world, None, crate::stamp::Stamp::UNIX_EPOCH).unwrap();
 
         // Should contain ISO 8601 timestamp
         assert!(json.contains("export_date"));
@@ -220,7 +240,7 @@ mod tests {
     #[test]
     fn test_json_default_board_name() {
         let mut world = BoardWorld::new();
-        let json = export_bom_json(&mut world, None).unwrap();
+        let json = export_bom_json(&mut world, None, crate::stamp::Stamp::UNIX_EPOCH).unwrap();
 
         let doc: BomDocument = serde_json::from_str(&json).unwrap();
         assert_eq!(doc.metadata.board_name, "board");

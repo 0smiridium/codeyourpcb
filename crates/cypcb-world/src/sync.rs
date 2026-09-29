@@ -39,6 +39,7 @@
 //! }
 //! ```
 
+use crate::in_build_order;
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 
@@ -79,6 +80,32 @@ pub enum SyncError {
     UnknownFootprint {
         /// The unknown footprint name.
         name: String,
+        /// Source code for miette display.
+        src: String,
+        /// Source span of the footprint reference.
+        span: miette::SourceSpan,
+    },
+
+    /// A component's footprint was to come from a source that could not be
+    /// read, such as a library index that does not open.
+    UnreadableFootprint {
+        /// The footprint name the component uses.
+        name: String,
+        /// What could not be read, and why.
+        why: String,
+        /// Source code for miette display.
+        src: String,
+        /// Source span of the footprint reference.
+        span: miette::SourceSpan,
+    },
+
+    /// A component's footprint name is held more than once by its source,
+    /// such as a bare `kicad::SOT-23-5` that two libraries hold.
+    AmbiguousFootprint {
+        /// The footprint name the component uses.
+        name: String,
+        /// Every footprint it could mean, in full.
+        candidates: Vec<String>,
         /// Source code for miette display.
         src: String,
         /// Source span of the footprint reference.
@@ -270,6 +297,14 @@ impl fmt::Display for SyncError {
             SyncError::UnknownFootprint { name, .. } => {
                 write!(f, "unknown footprint: '{}'", name)
             }
+            SyncError::UnreadableFootprint { why, .. } => write!(f, "{why}"),
+            SyncError::AmbiguousFootprint {
+                name, candidates, ..
+            } => write!(
+                f,
+                "footprint '{name}' is in more than one library: {}",
+                candidates.join(", ")
+            ),
             SyncError::DuplicateRefDes { refdes, .. } => {
                 write!(f, "duplicate reference designator: '{}'", refdes)
             }
@@ -364,6 +399,12 @@ impl Diagnostic for SyncError {
     fn code<'a>(&'a self) -> Option<Box<dyn fmt::Display + 'a>> {
         match self {
             SyncError::UnknownFootprint { .. } => Some(Box::new("cypcb::sync::unknown_footprint")),
+            SyncError::UnreadableFootprint { .. } => {
+                Some(Box::new("cypcb::sync::unreadable_footprint"))
+            }
+            SyncError::AmbiguousFootprint { .. } => {
+                Some(Box::new("cypcb::sync::ambiguous_footprint"))
+            }
             SyncError::DuplicateRefDes { .. } => Some(Box::new("cypcb::sync::duplicate_refdes")),
             SyncError::UnknownComponent { .. } => Some(Box::new("cypcb::sync::unknown_component")),
             SyncError::UnknownCoverageRegion { .. } => {
@@ -388,9 +429,22 @@ impl Diagnostic for SyncError {
 
     fn help<'a>(&'a self) -> Option<Box<dyn fmt::Display + 'a>> {
         match self {
+            SyncError::UnknownFootprint { name, .. } if name.contains("::") => {
+                Some(Box::new(
+                    "a `source::name` footprint is read from cypcb-library.db in the design's \
+                     directory or the nearest one above it: `cypcb library import <directory>` \
+                     puts it there, and `cypcb library search` prints the name to write",
+                ))
+            }
             SyncError::UnknownFootprint { .. } => {
                 Some(Box::new("add this footprint to the library or use a built-in footprint like '0402', '0603', 'DIP-8'"))
             }
+            SyncError::UnreadableFootprint { name, .. } => Some(Box::new(format!(
+                "'{name}' comes from that file, and the file gives no footprint for it"
+            ))),
+            SyncError::AmbiguousFootprint { .. } => Some(Box::new(
+                "write the one you mean in full: `source::library:name`",
+            )),
             SyncError::DuplicateRefDes { .. } => {
                 Some(Box::new("each component must have a unique reference designator"))
             }
@@ -478,6 +532,8 @@ impl Diagnostic for SyncError {
     fn source_code(&self) -> Option<&dyn SourceCode> {
         match self {
             SyncError::UnknownFootprint { src, .. } => Some(src),
+            SyncError::UnreadableFootprint { src, .. } => Some(src),
+            SyncError::AmbiguousFootprint { src, .. } => Some(src),
             SyncError::DuplicateRefDes { src, .. } => Some(src),
             SyncError::UnknownComponent { src, .. } => Some(src),
             SyncError::UnknownCoverageRegion { src, .. } => Some(src),
@@ -502,6 +558,12 @@ impl Diagnostic for SyncError {
                     *span,
                 ))))
             }
+            SyncError::UnreadableFootprint { span, .. } => Some(Box::new(std::iter::once(
+                LabeledSpan::new_with_span(Some("footprint not read".to_string()), *span),
+            ))),
+            SyncError::AmbiguousFootprint { span, .. } => Some(Box::new(std::iter::once(
+                LabeledSpan::new_with_span(Some("more than one footprint".to_string()), *span),
+            ))),
             SyncError::DuplicateRefDes {
                 first, duplicate, ..
             } => Some(Box::new(
@@ -622,6 +684,7 @@ impl miette::Diagnostic for SyncWarning {
 /// The synchronization continues even when errors occur, producing
 /// a partial world that can still be useful for error reporting.
 #[derive(Debug, Default)]
+#[must_use = "a board that did not sync is only partly loaded; check `errors`"]
 pub struct SyncResult {
     /// Semantic errors encountered during sync.
     pub errors: Vec<SyncError>,
@@ -955,10 +1018,9 @@ fn match_diff_pair_lengths(
         };
 
         let lengths: Vec<(crate::components::NetId, cypcb_core::Nm)> = {
-            let mut query = world.ecs_mut().query::<&Trace>();
             let mut positive_length = 0i64;
             let mut negative_length = 0i64;
-            for trace in query.iter(world.ecs()) {
+            for trace in in_build_order::<&Trace>(world.ecs_mut()) {
                 if trace.net_id == positive_id {
                     positive_length += trace.total_length().0;
                 } else if trace.net_id == negative_id {
@@ -985,9 +1047,8 @@ fn match_diff_pair_lengths(
         // The longest straight run on the short half is where a meander has
         // room; a short segment between two pads has none.
         let target = {
-            let mut query = world.ecs_mut().query::<(Entity, &Trace)>();
-            query
-                .iter(world.ecs())
+            in_build_order::<(Entity, &Trace)>(world.ecs_mut())
+                .into_iter()
                 .filter(|(_, trace)| trace.net_id == short_net)
                 .flat_map(|(entity, trace)| {
                     trace
@@ -1318,7 +1379,27 @@ fn sync_component(
 
     // Check footprint exists
     let footprint_name = &comp.footprint.value;
-    if !footprint_lib.contains(footprint_name) {
+    if let Some(why) = footprint_lib
+        .why_unreadable(footprint_name)
+        .filter(|_| !footprint_lib.contains(footprint_name))
+    {
+        result.errors.push(SyncError::UnreadableFootprint {
+            name: footprint_name.clone(),
+            why: why.to_string(),
+            src: source.to_string(),
+            span: span_to_source_span(&comp.footprint.span),
+        });
+    } else if let Some(candidates) = footprint_lib
+        .candidates_for(footprint_name)
+        .filter(|_| !footprint_lib.contains(footprint_name))
+    {
+        result.errors.push(SyncError::AmbiguousFootprint {
+            name: footprint_name.clone(),
+            candidates: candidates.to_vec(),
+            src: source.to_string(),
+            span: span_to_source_span(&comp.footprint.span),
+        });
+    } else if !footprint_lib.contains(footprint_name) {
         result.errors.push(SyncError::UnknownFootprint {
             name: footprint_name.clone(),
             src: source.to_string(),
@@ -1720,9 +1801,8 @@ fn place_stitching_vias(world: &mut BoardWorld, footprint_lib: &FootprintLibrary
     use crate::components::{StitchPitch, Zone};
 
     let stitched: Vec<(Zone, cypcb_core::Nm)> = {
-        let mut query = world.ecs_mut().query::<(&Zone, &StitchPitch)>();
-        query
-            .iter(world.ecs())
+        in_build_order::<(&Zone, &StitchPitch)>(world.ecs_mut())
+            .into_iter()
             .map(|(zone, pitch)| (zone.clone(), pitch.0))
             .collect()
     };
@@ -2145,17 +2225,11 @@ fn get_pin_position(
         return Some(position);
     };
 
-    let degrees = world
+    let rotation = world
         .get::<crate::components::Rotation>(entity)
-        .map(|rotation| rotation.to_degrees())
-        .unwrap_or(0.0);
-    let (sin, cos) = degrees.to_radians().sin_cos();
-    let (px, py) = (offset.x.0 as f64, offset.y.0 as f64);
-
-    Some(Point::new(
-        Nm(position.x.0 + (px * cos - py * sin).round() as i64),
-        Nm(position.y.0 + (px * sin + py * cos).round() as i64),
-    ))
+        .copied()
+        .unwrap_or(crate::components::Rotation::ZERO);
+    Some(crate::components::place_pad(position, offset, rotation))
 }
 
 /// Parse a layer name string to a Layer enum.
@@ -2253,6 +2327,11 @@ fn convert_footprint_def(fp_def: &FootprintDef, copper_layers: u8) -> Footprint 
                         // SMD pads on top copper with paste and mask
                         vec![Layer::TopCopper, Layer::TopPaste, Layer::TopMask]
                     },
+                    rotation: p
+                        .rotation
+                        .as_ref()
+                        .map(|r| Rotation::from_degrees(r.angle))
+                        .unwrap_or(Rotation::ZERO),
                 }
             })
             .collect();
@@ -2264,7 +2343,14 @@ fn convert_footprint_def(fp_def: &FootprintDef, copper_layers: u8) -> Footprint 
     let courtyard = fp_def
         .courtyard
         .as_ref()
-        .map(|(w, h)| Rect::from_center_size(Point::ORIGIN, (w.to_nm(), h.to_nm())))
+        .map(|(w, h)| {
+            let centre = fp_def
+                .courtyard_centre
+                .as_ref()
+                .map(|(x, y)| Point::new(x.to_nm(), y.to_nm()))
+                .unwrap_or(Point::ORIGIN);
+            Rect::from_center_size(centre, (w.to_nm(), h.to_nm()))
+        })
         .unwrap_or_else(|| bounds.expand(Nm::from_mm(0.5)));
 
     Footprint {
@@ -2329,8 +2415,10 @@ fn calculate_footprint_bounds(pads: &[FootprintPadDef]) -> Rect {
     let mut max_y = Nm(i64::MIN);
 
     for pad in pads {
-        let half_w = Nm(pad.size.0 .0 / 2);
-        let half_h = Nm(pad.size.1 .0 / 2);
+        // Its sides along the footprint's axes, once its own turn is taken up.
+        let (width, height) = pad.outline(Point::ORIGIN, Rotation::ZERO).size;
+        let half_w = Nm(width.0 / 2);
+        let half_h = Nm(height.0 / 2);
 
         let pad_min_x = Nm(pad.position.x.0 - half_w.0);
         let pad_min_y = Nm(pad.position.y.0 - half_h.0);
@@ -2642,6 +2730,15 @@ use A as TOP {
 }
 "#;
         let parsed = cypcb_parser::parse(source);
+        assert!(
+            parsed.errors.is_empty(),
+            "the board in this test does not parse: {:?}",
+            parsed
+                .errors
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+        );
         let mut world = BoardWorld::new();
         let mut library = FootprintLibrary::new();
         let result = sync_ast_to_world(&parsed.value, source, &mut world, &mut library);
@@ -2670,6 +2767,15 @@ use NoSuchThing as X {
 }
 "#;
         let parsed = cypcb_parser::parse(source);
+        assert!(
+            parsed.errors.is_empty(),
+            "the board in this test does not parse: {:?}",
+            parsed
+                .errors
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+        );
         let mut world = BoardWorld::new();
         let mut library = FootprintLibrary::new();
         let result = sync_ast_to_world(&parsed.value, source, &mut world, &mut library);
@@ -2716,6 +2822,15 @@ use M as A {
 }
 "#;
         let parsed = cypcb_parser::parse(source);
+        assert!(
+            parsed.errors.is_empty(),
+            "the board in this test does not parse: {:?}",
+            parsed
+                .errors
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+        );
         let mut world = BoardWorld::new();
         let mut library = FootprintLibrary::new();
         let result = sync_ast_to_world(&parsed.value, source, &mut world, &mut library);
@@ -2895,9 +3010,19 @@ trace SIG {
 }
 "#;
         let parsed = cypcb_parser::parse(source);
+        assert!(
+            parsed.errors.is_empty(),
+            "the board in this test does not parse: {:?}",
+            parsed
+                .errors
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+        );
         let mut world = BoardWorld::new();
         let mut library = FootprintLibrary::new();
-        sync_ast_to_world(&parsed.value, source, &mut world, &mut library);
+        let result = sync_ast_to_world(&parsed.value, source, &mut world, &mut library);
+        assert!(result.is_ok(), "sync errors: {:?}", result.errors);
 
         let expected = world.get_net("SIG").expect("net interned");
         let ecs = world.ecs_mut();
@@ -3552,13 +3677,33 @@ board test { size 20mm x 20mm }
         let mut lib = FootprintLibrary::new();
 
         let first = parse(with_footprint);
-        sync_ast_to_world(&first.value, with_footprint, &mut world, &mut lib);
+        assert!(
+            first.errors.is_empty(),
+            "the board in this test does not parse: {:?}",
+            first
+                .errors
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+        );
+        let result = sync_ast_to_world(&first.value, with_footprint, &mut world, &mut lib);
+        assert!(result.is_ok(), "sync errors: {:?}", result.errors);
         assert!(lib.contains("TEMP_PART"));
 
         // Hot reload with the footprint deleted from the source: it must not
         // linger and keep resolving.
         let second = parse(without_footprint);
-        sync_ast_to_world(&second.value, without_footprint, &mut world, &mut lib);
+        assert!(
+            second.errors.is_empty(),
+            "the board in this test does not parse: {:?}",
+            second
+                .errors
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+        );
+        let result = sync_ast_to_world(&second.value, without_footprint, &mut world, &mut lib);
+        assert!(result.is_ok(), "sync errors: {:?}", result.errors);
         assert!(!lib.contains("TEMP_PART"));
         assert!(lib.contains("0402"), "built-ins must survive a re-sync");
     }
@@ -4057,14 +4202,12 @@ impl Frame {
     /// has to be turned by the parent's angle before being added, and the
     /// angles accumulate.
     fn compose(&self, child: Frame) -> Frame {
-        let (sin, cos) = self.angle_deg.to_radians().sin_cos();
-        let x = child.origin.0 as f64;
-        let y = child.origin.1 as f64;
+        let turned = crate::components::rotate_about_origin(
+            Point::new(Nm(child.origin.0), Nm(child.origin.1)),
+            self.angle_deg,
+        );
         Frame {
-            origin: (
-                self.origin.0 + (x * cos - y * sin).round() as i64,
-                self.origin.1 + (x * sin + y * cos).round() as i64,
-            ),
+            origin: (self.origin.0 + turned.x.0, self.origin.1 + turned.y.0),
             angle_deg: self.angle_deg + child.angle_deg,
         }
     }
@@ -4225,11 +4368,11 @@ fn place_in_instance(component: &mut ComponentDef, origin: (i64, i64), angle_deg
     use cypcb_parser::ast::{Dimension as AstDimension, RotationExpr};
 
     if let Some(position) = &mut component.position {
-        let x = position.x.to_nm().raw() as f64;
-        let y = position.y.to_nm().raw() as f64;
-        let (sin, cos) = angle_deg.to_radians().sin_cos();
-        let rotated_x = x * cos - y * sin;
-        let rotated_y = x * sin + y * cos;
+        let turned = crate::components::rotate_about_origin(
+            Point::new(position.x.to_nm(), position.y.to_nm()),
+            angle_deg,
+        );
+        let (rotated_x, rotated_y) = (turned.x.0 as f64, turned.y.0 as f64);
 
         // A placement this code computed, not one the source wrote - so the
         // unit is stated rather than assumed, and nothing warns about it.

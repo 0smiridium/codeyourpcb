@@ -430,11 +430,14 @@ fn the_sharp_entries_against_every_pad_that_could_have_been_one() {
     // J2.S1, J3.3, J3.4 and J3.6 came in sharp and C5.2 left with its route.
     // Sixteen until 2026-09-25, when the boards stopped being read as their
     // own mirror image: the router lays different copper on a board the right
-    // way up, and the census it is read beside counts eight.
+    // way up, and the census it is read beside counts eight. Ten since
+    // 2026-09-27, when two pads of one net that touch became one piece and
+    // `multi_ic` routes three GND connections fewer: J4.2, J5.2 and C5.2 came
+    // in sharp on the copper laid around them and C11.2 left.
     assert_eq!(
         sharp.len(),
-        8,
-        "the census reports eight sharp entries across the six fixtures"
+        10,
+        "the census reports ten sharp entries across the six fixtures"
     );
 
     // The first reading, and the denominator that kills it. Every sharp pad is
@@ -875,8 +878,10 @@ fn a_circular_land_reads_the_same_from_its_own_geometry() {
     // All of them were measured on the boards as the KiCad reader read them
     // until 2026-09-25, a mirror image of the files. Read the right way up the
     // sharp entries into a circular land are J2.9 0.683, J3.4 0.241, J3.6
-    // 0.205, U2.13 0.156, U1.13 0.123 and J4.12 0.116.
-    const CANON_SHARP_RATIOS: &[f64] = &[0.683, 0.241, 0.205, 0.156, 0.123, 0.116];
+    // 0.205, U2.13 0.156, U1.13 0.123 and J4.12 0.116. J4.2 and J5.2 came in
+    // at 0.06 each on 2026-09-27, on `multi_ic` copper rerouted around the
+    // pairs of touching pads it no longer routes between.
+    const CANON_SHARP_RATIOS: &[f64] = &[0.683, 0.241, 0.205, 0.156, 0.123, 0.116, 0.06, 0.06];
     let mut printed: Vec<f64> = readings
         .iter()
         .filter(|r| r.sharp)

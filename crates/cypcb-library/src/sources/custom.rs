@@ -94,40 +94,37 @@ impl CustomSource {
         Ok(())
     }
 
-    /// Remove a component from custom library
-    pub fn remove_component(&self, name: &str) -> Result<(), LibraryError> {
-        let conn = self.conn.lock().unwrap();
-
-        // Get the library name before deleting
-        let library: Option<String> = conn
-            .query_row(
-                "SELECT library FROM components WHERE source = ?1 AND name = ?2",
-                rusqlite::params!["custom", name],
-                |row| row.get(0),
-            )
-            .ok();
-
-        // Delete component
-        let deleted = conn.execute(
-            "DELETE FROM components WHERE source = ?1 AND name = ?2",
-            rusqlite::params!["custom", name],
-        )?;
-
-        if deleted == 0 {
-            return Err(LibraryError::NotFound(format!(
+    /// The one component `written` means, as a design names it after
+    /// `custom::`: `library:name`, or a bare `name` one library alone holds.
+    ///
+    /// A bare name two libraries hold is [`LibraryError::Ambiguous`]: an
+    /// edit by name alone changed the component in every library that held
+    /// the name.
+    fn resolve(conn: &Connection, written: &str) -> Result<(String, String), LibraryError> {
+        match schema::get_component(conn, "custom", written)? {
+            Some(component) => Ok((component.library, component.id.name)),
+            None => Err(LibraryError::NotFound(format!(
                 "Component 'custom::{}' not found",
-                name
-            )));
+                written
+            ))),
         }
+    }
 
-        // Update library component count
-        if let Some(lib_name) = library {
-            conn.execute(
-                "UPDATE libraries SET component_count = component_count - 1
-                 WHERE source = ?1 AND name = ?2",
-                rusqlite::params!["custom", &lib_name],
-            )?;
-        }
+    /// Remove a component from custom library, named `library:name` or by a
+    /// name one library alone holds
+    pub fn remove_component(&self, written: &str) -> Result<(), LibraryError> {
+        let conn = self.conn.lock().unwrap();
+        let (library, name) = Self::resolve(&conn, written)?;
+
+        conn.execute(
+            "DELETE FROM components WHERE source = ?1 AND library = ?2 AND name = ?3",
+            rusqlite::params!["custom", &library, &name],
+        )?;
+        conn.execute(
+            "UPDATE libraries SET component_count = component_count - 1
+             WHERE source = ?1 AND name = ?2",
+            rusqlite::params!["custom", &library],
+        )?;
 
         Ok(())
     }
@@ -135,22 +132,16 @@ impl CustomSource {
     /// Update component category for organization by function
     pub fn update_component_category(
         &self,
-        name: &str,
+        written: &str,
         category: &str,
     ) -> Result<(), LibraryError> {
         let conn = self.conn.lock().unwrap();
+        let (library, name) = Self::resolve(&conn, written)?;
 
-        let updated = conn.execute(
-            "UPDATE components SET category = ?1 WHERE source = ?2 AND name = ?3",
-            rusqlite::params![category, "custom", name],
+        conn.execute(
+            "UPDATE components SET category = ?1 WHERE source = ?2 AND library = ?3 AND name = ?4",
+            rusqlite::params![category, "custom", &library, &name],
         )?;
-
-        if updated == 0 {
-            return Err(LibraryError::NotFound(format!(
-                "Component 'custom::{}' not found",
-                name
-            )));
-        }
 
         Ok(())
     }
@@ -158,23 +149,17 @@ impl CustomSource {
     /// Update component manufacturer for organization
     pub fn update_component_manufacturer(
         &self,
-        name: &str,
+        written: &str,
         manufacturer: &str,
     ) -> Result<(), LibraryError> {
         let conn = self.conn.lock().unwrap();
+        let (library, name) = Self::resolve(&conn, written)?;
 
-        // Update both the manufacturer column and the metadata_json
-        let updated = conn.execute(
-            "UPDATE components SET manufacturer = ?1 WHERE source = ?2 AND name = ?3",
-            rusqlite::params![manufacturer, "custom", name],
+        conn.execute(
+            "UPDATE components SET manufacturer = ?1
+             WHERE source = ?2 AND library = ?3 AND name = ?4",
+            rusqlite::params![manufacturer, "custom", &library, &name],
         )?;
-
-        if updated == 0 {
-            return Err(LibraryError::NotFound(format!(
-                "Component 'custom::{}' not found",
-                name
-            )));
-        }
 
         Ok(())
     }
@@ -245,16 +230,14 @@ impl LibrarySource for CustomSource {
         let mut stmt = conn.prepare(
             "SELECT source, name, library, category, footprint_data,
                     description, datasheet_url, manufacturer, mpn, value, package,
-                    step_model_path, metadata_json
+                    step_model_path
              FROM components
              WHERE source = ?1 AND library = ?2",
         )?;
 
         let components = stmt
             .query_map(rusqlite::params!["custom", name], |row| {
-                let metadata_json: String = row.get(12)?;
-                let metadata = serde_json::from_str(&metadata_json).unwrap_or_default();
-
+                let metadata = schema::metadata_from_row(row, 5)?;
                 Ok(Component {
                     id: ComponentId::new(row.get::<_, String>(0)?, row.get::<_, String>(1)?),
                     library: row.get(2)?,
@@ -381,6 +364,110 @@ mod tests {
         assert_eq!(source.import_library("MyComponents").unwrap().len(), 0);
     }
 
+    fn part(name: &str, library: &str) -> Component {
+        Component {
+            id: ComponentId::new("custom", name),
+            library: library.to_string(),
+            category: Some("Resistors".to_string()),
+            footprint_data: None,
+            metadata: ComponentMetadata::default(),
+        }
+    }
+
+    /// (category, manufacturer) of each library's `R_10K`, and each
+    /// library's count, A first.
+    fn held(source: &CustomSource) -> Vec<(String, Option<String>, Option<String>, usize)> {
+        ["A", "B"]
+            .iter()
+            .map(|library| {
+                let components = source.import_library(library).unwrap();
+                let count = source
+                    .list_libraries()
+                    .unwrap()
+                    .into_iter()
+                    .find(|lib| lib.name == *library)
+                    .unwrap()
+                    .component_count;
+                let r = components.iter().find(|c| c.id.name == "R_10K");
+                (
+                    format!("{library}:{}", components.len()),
+                    r.and_then(|c| c.category.clone()),
+                    r.and_then(|c| c.metadata.manufacturer.clone()),
+                    count,
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn an_edit_changes_the_one_library_it_names() {
+        let conn = Connection::open_in_memory().unwrap();
+        initialize_schema(&conn).unwrap();
+        let source = CustomSource::new(Arc::new(Mutex::new(conn)));
+        source.create_library("A").unwrap();
+        source.create_library("B").unwrap();
+        source.add_component("A", part("R_10K", "A")).unwrap();
+        source.add_component("B", part("R_10K", "B")).unwrap();
+
+        source
+            .update_component_category("B:R_10K", "Passive")
+            .unwrap();
+        source
+            .update_component_manufacturer("A:R_10K", "Yageo")
+            .unwrap();
+        assert_eq!(
+            held(&source),
+            [
+                (
+                    "A:1".into(),
+                    Some("Resistors".into()),
+                    Some("Yageo".into()),
+                    1
+                ),
+                ("B:1".into(), Some("Passive".into()), None, 1),
+            ]
+        );
+
+        source.remove_component("A:R_10K").unwrap();
+        assert_eq!(
+            held(&source),
+            [
+                ("A:0".into(), None, None, 0),
+                ("B:1".into(), Some("Passive".into()), None, 1),
+            ]
+        );
+        // One library holds it now, so the bare name finds it.
+        source.update_component_category("R_10K", "Fixed").unwrap();
+        assert_eq!(held(&source)[1].1.as_deref(), Some("Fixed"));
+    }
+
+    #[test]
+    fn an_edit_by_a_name_two_libraries_hold_changes_neither() {
+        let conn = Connection::open_in_memory().unwrap();
+        initialize_schema(&conn).unwrap();
+        let source = CustomSource::new(Arc::new(Mutex::new(conn)));
+        source.create_library("A").unwrap();
+        source.create_library("B").unwrap();
+        source.add_component("A", part("R_10K", "A")).unwrap();
+        source.add_component("B", part("R_10K", "B")).unwrap();
+        let before = held(&source);
+
+        let said = |result: Result<(), LibraryError>| result.unwrap_err().to_string();
+        let why = "'custom::R_10K' is in more than one library: \
+                   custom::A:R_10K, custom::B:R_10K; write the one you mean";
+        assert_eq!(said(source.remove_component("R_10K")), why);
+        assert_eq!(said(source.update_component_category("R_10K", "X")), why);
+        assert_eq!(
+            said(source.update_component_manufacturer("R_10K", "X")),
+            why
+        );
+        assert_eq!(held(&source), before);
+        assert_eq!(
+            said(source.remove_component("C:R_10K")),
+            "Not found: Component 'custom::C:R_10K' not found"
+        );
+    }
+
     #[test]
     fn test_delete_library() {
         let conn = Connection::open_in_memory().unwrap();
@@ -409,5 +496,142 @@ mod tests {
         // Components should also be deleted
         let components = source.import_library("MyComponents").unwrap();
         assert_eq!(components.len(), 0);
+    }
+
+    /// A's `R_10K` with every field set to `tag`.
+    fn tagged(tag: &str) -> Component {
+        let field = |name: &str| Some(format!("{tag} {name}"));
+        Component {
+            category: field("category"),
+            metadata: ComponentMetadata {
+                description: field("description"),
+                datasheet_url: field("datasheet"),
+                manufacturer: field("manufacturer"),
+                mpn: field("mpn"),
+                value: field("value"),
+                package: field("package"),
+                step_model_path: field("step"),
+            },
+            ..part("R_10K", "A")
+        }
+    }
+
+    /// The category and the seven metadata fields, in the order of
+    /// [`tagged`].
+    fn fields(category: Option<String>, m: ComponentMetadata) -> [Option<String>; 8] {
+        [
+            category,
+            m.description,
+            m.datasheet_url,
+            m.manufacturer,
+            m.mpn,
+            m.value,
+            m.package,
+            m.step_model_path,
+        ]
+    }
+
+    /// Check that each reader of A's `R_10K` returns `want`: the component by
+    /// its name, the search, the metadata alone (it has no category) and the
+    /// library's list.
+    fn assert_every_reader_returns(source: &CustomSource, want: &Component) {
+        let want = fields(want.category.clone(), want.metadata.clone());
+        let conn = source.conn.lock().unwrap();
+        let by_name = schema::get_component(&conn, "custom", "A:R_10K")
+            .unwrap()
+            .unwrap();
+        let searched = crate::search::search_components(&conn, "R_10K", &Default::default())
+            .unwrap()
+            .remove(0)
+            .component;
+        let metadata = crate::metadata::get_component_metadata(&conn, "custom", "R_10K")
+            .unwrap()
+            .unwrap();
+        drop(conn);
+        let listed = source
+            .import_library("A")
+            .unwrap()
+            .into_iter()
+            .find(|c| c.id.name == "R_10K")
+            .unwrap();
+        let mut without_category = want.clone();
+        without_category[0] = None;
+        for (reader, got, want) in [
+            (
+                "get_component",
+                fields(by_name.category, by_name.metadata),
+                &want,
+            ),
+            (
+                "search",
+                fields(searched.category, searched.metadata),
+                &want,
+            ),
+            (
+                "get_component_metadata",
+                fields(None, metadata),
+                &without_category,
+            ),
+            (
+                "import_library",
+                fields(listed.category, listed.metadata),
+                &want,
+            ),
+        ] {
+            assert_eq!(&got, want, "{reader}");
+        }
+    }
+
+    /// The manufacturer was edited in its column, and every reader but the
+    /// search read a JSON copy the edit did not change: the old name came
+    /// back. Each field now has one place, and each writer writes it there.
+    #[test]
+    fn every_field_comes_back_from_every_reader_as_last_written() {
+        let conn = Connection::open_in_memory().unwrap();
+        initialize_schema(&conn).unwrap();
+        let source = CustomSource::new(Arc::new(Mutex::new(conn)));
+        source.create_library("A").unwrap();
+
+        source.add_component("A", tagged("added")).unwrap();
+        assert_every_reader_returns(&source, &tagged("added"));
+
+        // Imported again: every field is written again.
+        schema::insert_component(&source.conn.lock().unwrap(), &tagged("imported")).unwrap();
+        assert_every_reader_returns(&source, &tagged("imported"));
+
+        // Edited: each edit writes its one field.
+        source
+            .update_component_category("A:R_10K", "edited category")
+            .unwrap();
+        source
+            .update_component_manufacturer("A:R_10K", "edited manufacturer")
+            .unwrap();
+        crate::metadata::associate_step_model(
+            &source.conn.lock().unwrap(),
+            "custom",
+            "R_10K",
+            "edited step",
+        )
+        .unwrap();
+        let mut edited = tagged("imported");
+        edited.category = Some("edited category".to_string());
+        edited.metadata.manufacturer = Some("edited manufacturer".to_string());
+        edited.metadata.step_model_path = Some("edited step".to_string());
+        assert_every_reader_returns(&source, &edited);
+
+        let conn = source.conn.lock().unwrap();
+        let found = |query: &str, manufacturer: Option<&str>| {
+            let filters = crate::models::SearchFilters {
+                manufacturer: manufacturer.map(str::to_string),
+                ..Default::default()
+            };
+            crate::search::search_components(&conn, query, &filters)
+                .unwrap()
+                .len()
+        };
+        assert_eq!(found("edited manufacturer", None), 1);
+        assert_eq!(found("R_10K", Some("edited manufacturer")), 1);
+        assert_eq!(found("imported manufacturer", None), 0);
+        assert_eq!(found("R_10K", Some("imported manufacturer")), 0);
     }
 }

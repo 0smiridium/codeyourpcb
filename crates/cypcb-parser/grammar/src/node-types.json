@@ -331,6 +331,26 @@
             "named": true
           }
         ]
+      },
+      "x": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "dimension",
+            "named": true
+          }
+        ]
+      },
+      "y": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "dimension",
+            "named": true
+          }
+        ]
       }
     }
   },
@@ -1220,6 +1240,16 @@
           },
           {
             "type": "string",
+            "named": true
+          }
+        ]
+      },
+      "rotation": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "rotation_property",
             "named": true
           }
         ]

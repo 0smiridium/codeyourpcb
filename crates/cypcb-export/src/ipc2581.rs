@@ -139,62 +139,21 @@ fn copper_layers(count: usize) -> Vec<(String, &'static str)> {
     layers
 }
 
-/// Write this board as an IPC-2581 document, stamped with the moment it was
-/// written.
-///
-/// The stamp lives here rather than in the caller for the same reason every
-/// other exporter's does: a fabricator asks when the files were cut, and the
-/// answer should not depend on which command asked for them.
-pub fn export_ipc2581_now(
-    world: &mut BoardWorld,
-    library: &FootprintLibrary,
-    house: HouseTolerances,
-) -> (String, Vec<String>) {
-    export_ipc2581(
-        world,
-        library,
-        house,
-        &chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S%z").to_string(),
-    )
-}
-
-/// The same, filling any pour to the fabricator's own figures.
-///
-/// **The pour in this document was drawn to `PourOptions::default()` whatever
-/// house the board was for**, while the Gerber path has taken the fab's
-/// numbers since `ExportJob` started passing them and the viewer since
-/// 2026-09-13. This was the last of the three readers still pouring to a
-/// default - and the one a fabricator receives.
-pub fn export_ipc2581_now_with(
-    world: &mut BoardWorld,
-    library: &FootprintLibrary,
-    house: HouseTolerances,
-    pour: &crate::pour::PourOptions,
-) -> (String, Vec<String>) {
-    export_ipc2581_with(
-        world,
-        library,
-        house,
-        &chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S%z").to_string(),
-        pour,
-    )
-}
-
 /// Write this board as an IPC-2581 document.
 ///
-/// `now` is the timestamp the document carries, passed in rather than read
-/// here so a test can write the same board twice and compare the two files.
+/// `stamp` is the time the document carries, passed in rather than read
+/// here so two runs over one board write the same bytes.
 pub fn export_ipc2581(
     world: &mut BoardWorld,
     library: &FootprintLibrary,
     house: HouseTolerances,
-    now: &str,
+    stamp: crate::stamp::Stamp,
 ) -> (String, Vec<String>) {
     export_ipc2581_with(
         world,
         library,
         house,
-        now,
+        stamp,
         &crate::pour::PourOptions::default(),
     )
 }
@@ -210,9 +169,10 @@ pub fn export_ipc2581_with(
     world: &mut BoardWorld,
     library: &FootprintLibrary,
     house: HouseTolerances,
-    now: &str,
+    stamp: crate::stamp::Stamp,
     pour: &crate::pour::PourOptions,
 ) -> (String, Vec<String>) {
+    let now = stamp.format("%Y-%m-%dT%H:%M:%S%z");
     let (size, stack) = world.board_info().unwrap_or((
         cypcb_world::components::BoardSize::new(Nm(0), Nm(0)),
         cypcb_world::components::LayerStack::new(2),
@@ -281,7 +241,7 @@ pub fn export_ipc2581_with(
                 placed.push((
                     layer_name.clone(),
                     place_pad_millideg(position, pad.position, rotation),
-                    rotation,
+                    rotation + pad.rotation.0,
                     id,
                 ));
             }

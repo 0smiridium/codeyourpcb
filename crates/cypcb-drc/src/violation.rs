@@ -100,6 +100,8 @@ pub enum ViolationKind {
     SlotClearance,
     /// The land around a drilled hole is smaller than the fab will image.
     PadLand,
+    /// A footprint's pads reach past its own courtyard.
+    LandOutsideCourtyard,
     /// A trace meets a land at too sharp a wedge.
     PadEntry,
     /// A via joins two layers by a route the build does not make.
@@ -158,6 +160,13 @@ pub fn pair_of(message: &str) -> &str {
 /// number - it would mask a routing change that a per-segment count catches.
 /// What a reader needed was never a different count but a second one, which is
 /// this.
+///
+/// Since 2026-09-26 the rule counts one row per place - one unbroken run of a
+/// trace too close to one pad, one via or one other net's trace - so a run
+/// along one pad is one row however many segments it takes. On the shipped
+/// benchmarks 319 rows for 152 contacts became 219 for the same 152. What stays
+/// true of the decision is its reason: a violation is a place, and two places
+/// on one pad are still two rows.
 pub fn clearance_contacts(violations: &[DrcViolation]) -> usize {
     let mut seen: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
     for violation in violations {
@@ -244,6 +253,7 @@ impl std::fmt::Display for ViolationKind {
             ViolationKind::DrillAspectRatio => write!(f, "drill-aspect-ratio"),
             ViolationKind::SlotClearance => write!(f, "slot-clearance"),
             ViolationKind::PadLand => write!(f, "pad-land"),
+            ViolationKind::LandOutsideCourtyard => write!(f, "land-outside-courtyard"),
             ViolationKind::PadEntry => write!(f, "pad-entry"),
             ViolationKind::ViaSpan => write!(f, "via-span"),
             ViolationKind::FlexHole => write!(f, "flex-hole"),
@@ -875,6 +885,38 @@ impl DrcViolation {
                 actual.to_mm(),
                 drill.to_mm(),
                 required.to_mm(),
+            ),
+        }
+    }
+
+    /// A footprint's pads reach past its own courtyard.
+    ///
+    /// Reported once per footprint, on the first part that uses it. `actual`
+    /// is how far the first such pad reaches out; there is no required
+    /// figure, since the courtyard is meant to hold the pad whole.
+    #[allow(clippy::too_many_arguments)]
+    pub fn land_outside_courtyard(
+        entity: Entity,
+        footprint: String,
+        refdes: String,
+        pad: String,
+        outside: usize,
+        pads: usize,
+        reach: Nm,
+        location: Point,
+    ) -> Self {
+        DrcViolation {
+            kind: ViolationKind::LandOutsideCourtyard,
+            actual: Some(reach),
+            required: None,
+            area: None,
+            location,
+            entity,
+            other_entity: None,
+            source_span: None,
+            message: format!(
+                "footprint {footprint}: {outside} of {pads} pads reach outside its courtyard, pad {pad} by {:.3}mm (first seen on {refdes})",
+                reach.to_mm(),
             ),
         }
     }

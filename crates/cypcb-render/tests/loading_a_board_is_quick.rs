@@ -55,16 +55,19 @@ fn median(mut values: Vec<u128>) -> u128 {
     values[values.len() / 2]
 }
 
-/// Load the same board five times and report the median.
-fn time_load(source: &str) -> u128 {
+/// Load the same board five times and report the median. `files_json` holds
+/// the files the board imports, keyed by the path it imports them by.
+fn time_load(name: &str, source: &str, files_json: &str) -> u128 {
     let mut engine = PcbEngine::new();
     // One warm-up: the first load of a process pays for lazily built tables.
-    engine.load_source(source);
+    let loaded = engine.load_source_with_imports(source, files_json);
+    assert!(loaded.is_empty(), "{name} does not load: {loaded}");
 
     let runs: Vec<u128> = (0..5)
         .map(|_| {
             let started = Instant::now();
-            engine.load_source(source);
+            let loaded = engine.load_source_with_imports(source, files_json);
+            assert!(loaded.is_empty(), "{name} does not load: {loaded}");
             started.elapsed().as_micros()
         })
         .collect();
@@ -75,7 +78,7 @@ fn time_load(source: &str) -> u128 {
 fn a_board_the_size_of_a_real_design_loads_in_a_blink() {
     for parts in [50, 200, 500] {
         let source = heavy_board(parts);
-        let micros = time_load(&source);
+        let micros = time_load(&format!("the {parts}-part board"), &source, "{}");
         println!(
             "[load] {parts} parts, {} bytes -> {:.1}ms",
             source.len(),
@@ -101,10 +104,20 @@ fn every_example_loads_in_a_blink() {
         .expect("the crate sits two levels below the repo root")
         .join("examples");
 
+    // What an example imports lives in `examples/lib`, and the editor hands
+    // those files over with the board. Timing a board without them times a
+    // board that stopped loading at its first import.
+    let mut files = std::collections::BTreeMap::new();
+    for path in cypcb_fixtures::tree::tracked_in(dir.join("lib")) {
+        let name = path.file_name().unwrap_or_default().to_string_lossy();
+        let text = std::fs::read_to_string(&path).expect("the library file is readable");
+        files.insert(format!("lib/{name}"), text);
+    }
+    let files_json = serde_json::to_string(&files).expect("a map of strings serialises");
+
     let mut slowest = (String::new(), 0u128);
     let mut checked = 0;
-    for entry in std::fs::read_dir(&dir).expect("the examples are there") {
-        let path = entry.expect("a directory entry").path();
+    for path in cypcb_fixtures::tree::tracked_in(&dir) {
         if path.extension().is_none_or(|ext| ext != "cypcb") {
             continue;
         }
@@ -119,7 +132,7 @@ fn every_example_loads_in_a_blink() {
         }
 
         let source = std::fs::read_to_string(&path).expect("the example is readable");
-        let micros = time_load(&source);
+        let micros = time_load(&name, &source, &files_json);
         checked += 1;
         if micros > slowest.1 {
             slowest = (name, micros);

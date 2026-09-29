@@ -400,7 +400,7 @@ fn export_writes_the_files_when_forced() {
         "and say that it went ahead with a short on the board, got:\n{stderr}"
     );
     assert!(
-        std::fs::read_dir(&out).is_ok_and(|dir| dir.count() > 0),
+        cypcb_fixtures::tree::written_entries(&out).is_ok_and(|dir| dir.count() > 0),
         "the files should be there"
     );
 
@@ -438,7 +438,7 @@ fn export_resolves_imports_the_way_check_does() {
     // "Did not refuse" is not "produced". The deliverable is copper, so the
     // directory is opened and the copper counted: a run that resolved every
     // import and then wrote nothing would pass the two assertions above.
-    let copper = std::fs::read_dir(out.join("gerber"))
+    let copper = cypcb_fixtures::tree::written_entries(out.join("gerber"))
         .expect("an export that succeeded wrote a gerber directory")
         .filter_map(Result::ok)
         .filter(|entry| {

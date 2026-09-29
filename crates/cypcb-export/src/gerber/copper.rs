@@ -51,7 +51,7 @@ pub enum ExportError {
 /// let library = FootprintLibrary::new();
 /// let format = CoordinateFormat::FORMAT_MM_2_6;
 ///
-/// let gerber = export_copper_layer(&mut world, &library, Layer::TopCopper, &format).unwrap();
+/// let gerber = export_copper_layer(&mut world, &library, Layer::TopCopper, &format, cypcb_export::stamp::Stamp::UNIX_EPOCH).unwrap();
 /// assert!(gerber.contains("TF.FileFunction,Copper,L1,Top"));
 /// assert!(gerber.contains("M02*")); // End of file
 /// ```
@@ -60,6 +60,7 @@ pub fn export_copper_layer(
     library: &FootprintLibrary,
     layer: Layer,
     format: &CoordinateFormat,
+    stamp: crate::stamp::Stamp,
 ) -> Result<String, ExportError> {
     // The clearance a pour keeps from foreign copper is the fab's, and this
     // crate does not know the fab. `ExportJob` does, and passes it through
@@ -73,6 +74,7 @@ pub fn export_copper_layer(
         format,
         &crate::pour::PourOptions::default(),
         None,
+        stamp,
     )
 }
 
@@ -88,6 +90,7 @@ pub fn export_copper_layer_with(
     format: &CoordinateFormat,
     pour: &crate::pour::PourOptions,
     teardrops: Option<TeardropRatios>,
+    stamp: crate::stamp::Stamp,
 ) -> Result<String, ExportError> {
     // Only copper layers are supported
     assert!(layer.is_copper(), "Layer must be a copper layer");
@@ -120,7 +123,13 @@ pub fn export_copper_layer_with(
     let total_layers = world.board_info().map(|(_, ls)| ls.count).unwrap_or(2);
 
     // Write header
-    output.push_str(&write_header(&function, board_name, format, total_layers));
+    output.push_str(&write_header(
+        &function,
+        board_name,
+        format,
+        total_layers,
+        stamp,
+    ));
 
     // Collect all drawing commands (will be emitted after aperture definitions)
     let mut drawing_commands = String::new();
@@ -188,11 +197,11 @@ fn export_pads(
                 continue;
             }
 
-            // Calculate absolute position (component position + rotated pad offset)
-            let abs_pos = place_pad_millideg(position.0, pad.position, rotation.0);
-
-            // Get or create aperture for this pad
-            let aperture_shape = aperture_for_pad(pad);
+            // The pad turned with its part - where it lands and the aperture it
+            // is flashed with, from the one place a pad is turned.
+            let outline = pad.outline(position.0, *rotation);
+            let abs_pos = outline.centre;
+            let aperture_shape = aperture_for_pad(&outline);
             let dcode = apertures.get_or_create(aperture_shape);
 
             // Select aperture
@@ -475,7 +484,13 @@ mod tests {
         let library = FootprintLibrary::new();
         let format = CoordinateFormat::FORMAT_MM_2_6;
 
-        let result = export_copper_layer(&mut world, &library, Layer::TopCopper, &format);
+        let result = export_copper_layer(
+            &mut world,
+            &library,
+            Layer::TopCopper,
+            &format,
+            crate::stamp::Stamp::UNIX_EPOCH,
+        );
         assert!(result.is_ok());
 
         let gerber = result.unwrap();
@@ -505,6 +520,7 @@ mod tests {
                 slot: None,
                 layers: vec![Layer::TopCopper],
                 mask_margin: None,
+                rotation: Rotation::ZERO,
             }],
         };
         library.register(footprint);
@@ -520,7 +536,13 @@ mod tests {
         );
 
         let format = CoordinateFormat::FORMAT_MM_2_6;
-        let result = export_copper_layer(&mut world, &library, Layer::TopCopper, &format);
+        let result = export_copper_layer(
+            &mut world,
+            &library,
+            Layer::TopCopper,
+            &format,
+            crate::stamp::Stamp::UNIX_EPOCH,
+        );
         assert!(result.is_ok());
 
         let gerber = result.unwrap();
@@ -554,7 +576,13 @@ mod tests {
 
         let library = FootprintLibrary::new();
         let format = CoordinateFormat::FORMAT_MM_2_6;
-        let result = export_copper_layer(&mut world, &library, Layer::TopCopper, &format);
+        let result = export_copper_layer(
+            &mut world,
+            &library,
+            Layer::TopCopper,
+            &format,
+            crate::stamp::Stamp::UNIX_EPOCH,
+        );
         assert!(result.is_ok());
 
         let gerber = result.unwrap();
@@ -576,7 +604,13 @@ mod tests {
 
         let library = FootprintLibrary::new();
         let format = CoordinateFormat::FORMAT_MM_2_6;
-        let result = export_copper_layer(&mut world, &library, Layer::TopCopper, &format);
+        let result = export_copper_layer(
+            &mut world,
+            &library,
+            Layer::TopCopper,
+            &format,
+            crate::stamp::Stamp::UNIX_EPOCH,
+        );
         assert!(result.is_ok());
 
         let gerber = result.unwrap();
@@ -631,7 +665,14 @@ mod tests {
             Layer::Inner(1),
             Layer::BottomCopper,
         ] {
-            let gerber = export_copper_layer(&mut world, &library, layer, &format).unwrap();
+            let gerber = export_copper_layer(
+                &mut world,
+                &library,
+                layer,
+                &format,
+                crate::stamp::Stamp::UNIX_EPOCH,
+            )
+            .unwrap();
             assert!(
                 gerber.contains("X10000000Y10000000D03*"),
                 "{layer:?} has no flash for the via:\n{gerber}"
@@ -646,7 +687,13 @@ mod tests {
         let library = FootprintLibrary::new();
         let format = CoordinateFormat::FORMAT_MM_2_6;
 
-        let result = export_copper_layer(&mut world, &library, Layer::BottomCopper, &format);
+        let result = export_copper_layer(
+            &mut world,
+            &library,
+            Layer::BottomCopper,
+            &format,
+            crate::stamp::Stamp::UNIX_EPOCH,
+        );
         assert!(result.is_ok());
 
         let gerber = result.unwrap();

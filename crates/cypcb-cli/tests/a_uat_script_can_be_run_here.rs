@@ -18,6 +18,8 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
+use cypcb_fixtures::tree::tracked_under;
+
 fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -29,74 +31,46 @@ fn repo_root() -> PathBuf {
 /// Every file name in the repository, ignoring what a build put there.
 fn basenames(root: &Path) -> BTreeSet<String> {
     let skip = ["target", "node_modules", ".git", "dist", "test-results"];
-    let mut names = BTreeSet::new();
-    let mut stack = vec![root.to_path_buf()];
-    while let Some(at) = stack.pop() {
-        let Ok(entries) = std::fs::read_dir(&at) else {
-            continue;
-        };
-        for entry in entries {
-            let path = entry.expect("a directory entry").path();
-            let Some(name) = path
-                .file_name()
+    tracked_under(root)
+        .into_iter()
+        .filter(|path| {
+            path.strip_prefix(root)
+                .unwrap_or(path)
+                .parent()
+                .is_none_or(|dirs| {
+                    dirs.components()
+                        .all(|part| !skip.iter().any(|dir| part.as_os_str() == *dir))
+                })
+        })
+        .filter_map(|path| {
+            path.file_name()
                 .and_then(|n| n.to_str())
                 .map(str::to_string)
-            else {
-                continue;
-            };
-            if path.is_dir() {
-                if !skip.contains(&name.as_str()) {
-                    stack.push(path);
-                }
-            } else {
-                names.insert(name);
-            }
-        }
-    }
-    names
+        })
+        .collect()
 }
 
 /// Everything the viewer's own sources say, as one string to search.
 fn viewer_source(root: &Path) -> String {
     let mut text =
         std::fs::read_to_string(root.join("viewer").join("index.html")).unwrap_or_default();
-    let mut stack = vec![root.join("viewer").join("src")];
-    while let Some(at) = stack.pop() {
-        let Ok(entries) = std::fs::read_dir(&at) else {
-            continue;
-        };
-        for entry in entries {
-            let path = entry.expect("a directory entry").path();
-            if path.is_dir() {
-                stack.push(path);
-            } else if path.extension().is_some_and(|e| e == "ts") {
-                text.push_str(&std::fs::read_to_string(&path).unwrap_or_default());
-            }
+    for path in tracked_under(root.join("viewer").join("src")) {
+        if path.extension().is_some_and(|e| e == "ts") {
+            text.push_str(&std::fs::read_to_string(&path).unwrap_or_default());
         }
     }
     text
 }
 
 fn uat_scripts(root: &Path) -> Vec<PathBuf> {
-    let mut found = Vec::new();
-    let mut stack = vec![root.join(".gsd").join("milestones")];
-    while let Some(at) = stack.pop() {
-        let Ok(entries) = std::fs::read_dir(&at) else {
-            continue;
-        };
-        for entry in entries {
-            let path = entry.expect("a directory entry").path();
-            if path.is_dir() {
-                stack.push(path);
-            } else if path
-                .file_name()
+    let mut found: Vec<PathBuf> = tracked_under(root.join(".gsd").join("milestones"))
+        .into_iter()
+        .filter(|path| {
+            path.file_name()
                 .and_then(|n| n.to_str())
                 .is_some_and(|n| n.ends_with("-UAT.md"))
-            {
-                found.push(path);
-            }
-        }
-    }
+        })
+        .collect();
     found.sort();
     found
 }

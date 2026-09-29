@@ -13,7 +13,10 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 fn cypcb() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_cypcb"))
+    let mut command = Command::new(env!("CARGO_BIN_EXE_cypcb"));
+    // One fixed export time, so two exports compare byte for byte.
+    command.env("SOURCE_DATE_EPOCH", "0");
+    command
 }
 
 fn example(name: &str) -> PathBuf {
@@ -42,7 +45,7 @@ fn top_copper(board: &Path, out: &Path, teardrops: bool) -> String {
     assert!(status.success(), "the export failed");
 
     let gerber = out.join("gerber");
-    let file = std::fs::read_dir(&gerber)
+    let file = cypcb_fixtures::tree::written_entries(&gerber)
         .expect("the gerber directory exists")
         .map(|entry| entry.expect("a directory entry").path())
         .find(|path| {
@@ -93,20 +96,7 @@ fn a_board_that_does_not_ask_gets_what_it_got_before() {
     let plain = top_copper(&board, &scratch("unchanged-a"), false);
     let again = top_copper(&board, &scratch("unchanged-b"), false);
 
-    let without_the_clock = |gerber: &str| -> Vec<String> {
-        gerber
-            .lines()
-            .filter(|line| !line.contains("CreationDate"))
-            .map(str::to_string)
-            .collect()
-    };
-
-    assert!(plain.contains("CreationDate"), "the stamp is there to drop");
-    assert_eq!(
-        without_the_clock(&plain),
-        without_the_clock(&again),
-        "two plain exports of one board differ by the clock and nothing else"
-    );
+    assert_eq!(plain, again, "two plain exports of one board differ");
 }
 
 #[test]

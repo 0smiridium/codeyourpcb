@@ -1471,6 +1471,7 @@ impl<'a> Reader<'a> {
         let mut description = None;
         let mut pads = Vec::new();
         let mut courtyard = None;
+        let mut courtyard_centre = None;
         let mut silk = Vec::new();
 
         while !self.done() && !self.eat(&TokenKind::RBrace) {
@@ -1492,6 +1493,16 @@ impl<'a> Reader<'a> {
                         Some(pair) => courtyard = Some(pair),
                         None => self.unexpected("a courtyard like `2mm x 1mm`"),
                     }
+                    // `at X, Y` is where its centre is, instead of the origin.
+                    if self.eat_word("at") {
+                        let x = self.dimension();
+                        self.eat(&TokenKind::Comma);
+                        let y = self.dimension();
+                        match x.zip(y) {
+                            Some(centre) => courtyard_centre = Some(centre),
+                            None => self.unexpected("a centre like `0mm, -1.27mm`"),
+                        }
+                    }
                 }
                 Some("pad") => match self.pad(property_start) {
                     Some(pad) => pads.push(pad),
@@ -1512,6 +1523,7 @@ impl<'a> Reader<'a> {
             description,
             pads,
             courtyard,
+            courtyard_centre,
             silk,
             span: Span::new(start, self.behind()),
         })
@@ -1565,6 +1577,21 @@ impl<'a> Reader<'a> {
         let x = self.dimension()?;
         self.eat(&TokenKind::Comma);
         let y = self.dimension()?;
+        // `rotate 90` turns the pad inside its footprint. It follows the
+        // position the way a part's `rotate` follows its `at`, and the size
+        // after it is the pad's own, before the turn.
+        let rotation = if self.peek_ident() == Some("rotate") {
+            let property_start = self.here();
+            self.bump();
+            let (angle, _) = self.number()?;
+            self.eat_word("deg");
+            Some(RotationExpr {
+                angle,
+                span: Span::new(property_start, self.behind()),
+            })
+        } else {
+            None
+        };
         if !self.eat_word("size") {
             self.unexpected("`size` after a pad position");
             return None;
@@ -1633,6 +1660,7 @@ impl<'a> Reader<'a> {
             drill_height,
             corner_ratio,
             mask_margin,
+            rotation,
             span: Span::new(start, self.behind()),
         })
     }

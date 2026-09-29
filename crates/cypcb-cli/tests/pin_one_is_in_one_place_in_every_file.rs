@@ -203,7 +203,7 @@ fn a_kicad_file_read_back_keeps_pin_one_where_it_was() {
         out.to_str().unwrap(),
         "--force",
     ]);
-    let gerber = std::fs::read_dir(out.join("gerber"))
+    let gerber = cypcb_fixtures::tree::written_entries(out.join("gerber"))
         .expect("the gerbers were written")
         .filter_map(Result::ok)
         .find(|entry| entry.file_name().to_string_lossy().ends_with("-F_Cu.gbr"))

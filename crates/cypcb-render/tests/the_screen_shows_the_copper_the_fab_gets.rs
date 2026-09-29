@@ -89,7 +89,11 @@ fn the_viewer_and_the_gerber_are_given_the_same_rectangles() {
     // in the top copper file counts the same geometry the snapshot carries.
     // If either side ever computes its own, this test is what notices.
     let mut engine = PcbEngine::new();
-    assert!(engine.load_source(SOURCE).is_empty());
+    let loaded = engine.load_source(SOURCE);
+    assert!(
+        loaded.is_empty(),
+        "the board in this test does not load: {loaded}"
+    );
 
     let drawn: usize = pours(SOURCE)
         .iter()
@@ -99,13 +103,32 @@ fn the_viewer_and_the_gerber_are_given_the_same_rectangles() {
     let mut world = cypcb_world::BoardWorld::new();
     let mut library = cypcb_world::footprint::FootprintLibrary::new();
     let parsed = cypcb_parser::parse(SOURCE);
-    cypcb_world::sync_ast_to_world(&parsed.value, SOURCE, &mut world, &mut library);
+    assert!(
+        parsed.errors.is_empty(),
+        "the board in this test does not parse: {:?}",
+        parsed
+            .errors
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+    );
+    let synced = cypcb_world::sync_ast_to_world(&parsed.value, SOURCE, &mut world, &mut library);
+    assert!(
+        synced.errors.is_empty(),
+        "the board in this test does not load: {:?}",
+        synced
+            .errors
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+    );
 
     let gerber = cypcb_export::gerber::copper::export_copper_layer(
         &mut world,
         &library,
         cypcb_world::Layer::TopCopper,
         &cypcb_export::coords::CoordinateFormat::FORMAT_MM_2_6,
+        cypcb_export::stamp::Stamp::UNIX_EPOCH,
     )
     .expect("the top copper layer exports");
 

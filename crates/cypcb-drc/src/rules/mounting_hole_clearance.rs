@@ -14,7 +14,8 @@
 //! ties that net to the chassis.
 
 use cypcb_core::{Nm, Point};
-use cypcb_world::components::{FootprintRef, Position, RefDes, Rotation};
+use cypcb_world::components::{place_pad, FootprintRef, Position, RefDes, Rotation};
+use cypcb_world::in_build_order;
 use cypcb_world::BoardWorld;
 
 use super::clearance::{point_to_segment_distance, Copper, EntryCopper, Piece};
@@ -63,14 +64,14 @@ impl DrcRule for MountingHoleClearanceRule {
         let mut holes: Vec<BareHole> = Vec::new();
         {
             let ecs = world.ecs_mut();
-            let mut query = ecs.query::<(
+            for (entity, refdes, position, rotation, footprint_ref) in in_build_order::<(
                 cypcb_world::Entity,
                 &RefDes,
                 &Position,
                 &Rotation,
                 &FootprintRef,
-            )>();
-            for (entity, refdes, position, rotation, footprint_ref) in query.iter(ecs) {
+            )>(ecs)
+            {
                 let Some(footprint) = library.get(&footprint_ref.0) else {
                     continue;
                 };
@@ -80,14 +81,9 @@ impl DrcRule for MountingHoleClearanceRule {
                     }
                     let Some(drill) = pad.drill else { continue };
 
-                    let (sin, cos) = rotation.to_degrees().to_radians().sin_cos();
-                    let (px, py) = (pad.position.x.raw() as f64, pad.position.y.raw() as f64);
                     holes.push(BareHole {
                         entity,
-                        centre: Point::new(
-                            Nm(position.0.x.raw() + (px * cos - py * sin).round() as i64),
-                            Nm(position.0.y.raw() + (px * sin + py * cos).round() as i64),
-                        ),
+                        centre: place_pad(position.0, pad.position, *rotation),
                         radius: Nm(drill.raw() / 2),
                         refdes: refdes.as_str().to_string(),
                     });

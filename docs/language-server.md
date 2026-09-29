@@ -30,19 +30,25 @@ hover modules without the binary.
 | Request | Capability | What it gives |
 |---|---|---|
 | Hover | `hoverProvider` | The part, net, footprint, board, zone or trace under the cursor, with its value, its pins and the nets they reach |
-| Completion | `completionProvider` | Footprint names, net names, part names, property keys, layer names and top-level keywords. Trigger characters: `.`, space and `"` |
+| Completion | `completionProvider` | Footprint names, net names, part names, property keys, layer names and top-level keywords. Trigger characters: `.`, space and `"`. Footprint names are the built-ins, the design's own `footprint` blocks and every `source::name` in the nearest `cypcb-library.db`, written the way `cypcb library search` prints them. The index is read once and read again when the file changes, so a `cypcb library import` shows up on the next request |
 | Go to definition | `definitionProvider` | From a pin reference or a net name to where that part or net is declared, in the same file |
 | Document sync | `textDocumentSync` | Full text on open and on change, and the text again on save |
+| Position encoding | `positionEncoding` | What a column counts: `utf-8` when the client offers it in `general.positionEncodings`, otherwise `utf-16`, the protocol's default. Diagnostics, hover, completion and go to definition all convert through one function |
 
 Diagnostics are published on open, on change and on save, without being asked.
 They carry two sources:
 
 - `cypcb-parser` - syntax errors, unknown units, unknown component types, each
   on the span that caused it.
-- `cypcb-drc` - design rule violations against the JLCPCB 2-layer rules, on the
-  line where the part or trace is written. `unconnected-pin` and
+- `cypcb-drc` - design rule violations against the fab table `cypcb check`
+  uses for the same board, on the line where the part or trace is written. The
+  choice of table is described once, under `fab` in `docs/SYNTAX.md`: the
+  board's `fab`, else JLCPCB, for the board's layer count. `unconnected-pin` and
   `unrouted-pin` come back as warnings rather than errors: a part exists before
   its net does, and a board being written is not a broken board.
+- `cypcb` - a `fab` name this tool does not have, as a warning with the code
+  `cypcb::unknown-fab` on the name. The board is still checked, against the
+  JLCPCB table for its layer count, and the message names that table.
 
 The list is capped at 100 diagnostics per file, with a final entry saying how
 many were dropped.
@@ -96,6 +102,11 @@ cargo test -p cypcb-lsp
 
 # What the server actually advertises, which the table above has to match.
 cargo test -p cypcb-lsp --test the_manual_matches_the_server
+
+# Completion against 10,000 generated index names offers every one, in under
+# 85 bytes of answer a name. The size, not a time: it is what serialising and
+# parsing the answer cost, and it is the same on every host.
+cargo test -p cypcb-lsp --test the_language_server_answers -- completion_over_ten_thousand --nocapture
 ```
 
-Last verified: 2026-08-08.
+Last verified: 2026-09-27.

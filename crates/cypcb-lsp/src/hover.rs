@@ -119,16 +119,26 @@ fn hover_for_component(
     None
 }
 
+/// The footprints the document was built against, which hold what its index
+/// supplied as well as the built-ins; the built-ins alone before it is built.
+fn library_of<'a>(doc: &'a DocumentState, built_in: &'a FootprintLibrary) -> &'a FootprintLibrary {
+    doc.world
+        .as_ref()
+        .map_or(built_in, |world| world.footprints())
+}
+
 /// Enhanced component hover with net connections and DRC status.
 fn make_component_hover_enhanced(doc: &DocumentState, comp: &ComponentDef) -> HoverInfo {
-    let lib = FootprintLibrary::new();
+    let built_in = FootprintLibrary::new();
+    let lib = library_of(doc, &built_in);
     let mut lines = vec![format!("**{}** ({:?})", comp.refdes.value, comp.kind)];
 
-    // Footprint info with size if available
+    // Footprint info with size if available. A name from the index is shown
+    // in full, `source::library:name`, whatever the design shortened it to.
     if let Some(fp) = lib.get(&comp.footprint.value) {
         lines.push(format!(
             "Footprint: {} ({:.2}mm x {:.2}mm)",
-            comp.footprint.value,
+            lib.full_name(&comp.footprint.value),
             fp.bounds.width().to_mm(),
             fp.bounds.height().to_mm()
         ));
@@ -231,7 +241,8 @@ fn make_footprint_hover(doc: &DocumentState, footprint_name: &str) -> HoverInfo 
         };
     }
 
-    let lib = FootprintLibrary::new();
+    let built_in = FootprintLibrary::new();
+    let lib = library_of(doc, &built_in);
 
     if let Some(fp) = lib.get(footprint_name) {
         let pad_type = if fp.pads.iter().any(|p| p.drill.is_some()) {
@@ -240,7 +251,8 @@ fn make_footprint_hover(doc: &DocumentState, footprint_name: &str) -> HoverInfo 
             "SMD"
         };
 
-        let mut lines = vec![format!("**Footprint: {}**", fp.name)];
+        // A name from the index in full, whatever the design shortened it to.
+        let mut lines = vec![format!("**Footprint: {}**", lib.full_name(&fp.name))];
         lines.push(format!("Type: {}", pad_type));
         lines.push(format!("Pads: {}", fp.pads.len()));
         lines.push(String::new());

@@ -65,22 +65,23 @@ fn workspace(who: &str) -> cypcb_fixtures::ScratchDir {
     std::fs::create_dir_all(dir.join("examples/lib")).expect("a place to work");
     std::fs::create_dir_all(dir.join("tests/fixtures/benchmark")).expect("a place to work");
 
-    copy_tree(&repo_root().join("examples"), &dir.join("examples"));
+    copy_tree("examples", &dir.join("examples"));
     let board = "tests/fixtures/benchmark/led_blink.kicad_pcb";
     std::fs::copy(repo_root().join(board), dir.join(board)).expect("the KiCad fixture is there");
     dir
 }
 
-fn copy_tree(from: &Path, to: &Path) {
-    for entry in std::fs::read_dir(from).expect("a directory to copy") {
-        let entry = entry.expect("an entry");
-        let target = to.join(entry.file_name());
-        if entry.path().is_dir() {
-            std::fs::create_dir_all(&target).expect("a place to work");
-            copy_tree(&entry.path(), &target);
-        } else {
-            std::fs::copy(entry.path(), &target).expect("a file to copy");
-        }
+fn copy_tree(from: &str, to: &Path) {
+    let files = cypcb_fixtures::tree::tracked_under(from);
+    assert!(!files.is_empty(), "a directory to copy");
+    let from = cypcb_fixtures::tree::repo_root().join(from);
+    for path in files {
+        let target = to.join(
+            path.strip_prefix(&from)
+                .expect("a file under the directory"),
+        );
+        std::fs::create_dir_all(target.parent().expect("a directory")).expect("a place to work");
+        std::fs::copy(&path, &target).expect("a file to copy");
     }
 }
 

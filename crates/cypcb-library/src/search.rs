@@ -1,5 +1,5 @@
 use crate::error::LibraryError;
-use crate::models::{Component, ComponentId, ComponentMetadata, SearchFilters, SearchResult};
+use crate::models::{Component, ComponentId, SearchFilters, SearchResult};
 use rusqlite::Connection;
 
 /// Search components using FTS5 full-text search with BM25 ranking
@@ -50,7 +50,7 @@ pub fn search_components(
     let mut sql = String::from(
         "SELECT c.source, c.name, c.library, c.category, c.footprint_data,
                 c.description, c.datasheet_url, c.manufacturer, c.mpn,
-                c.value, c.package, c.step_model_path, c.metadata_json,
+                c.value, c.package, c.step_model_path,
                 bm25(components_fts) as rank
          FROM components c
          JOIN components_fts fts ON c.rowid = fts.rowid
@@ -94,15 +94,7 @@ pub fn search_components(
 
     let results = stmt
         .query_map(param_refs.as_slice(), |row| {
-            let metadata_json: String = row.get(12)?;
-            let metadata: ComponentMetadata =
-                serde_json::from_str(&metadata_json).map_err(|e| {
-                    rusqlite::Error::FromSqlConversionFailure(
-                        12,
-                        rusqlite::types::Type::Text,
-                        Box::new(e),
-                    )
-                })?;
+            let metadata = crate::schema::metadata_from_row(row, 5)?;
 
             let component = Component {
                 id: ComponentId {
@@ -115,7 +107,7 @@ pub fn search_components(
                 metadata,
             };
 
-            let rank: f64 = row.get(13)?;
+            let rank: f64 = row.get(12)?;
 
             Ok(SearchResult { component, rank })
         })?
@@ -195,7 +187,7 @@ pub fn component_count(conn: &Connection) -> Result<usize, LibraryError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::LibraryInfo;
+    use crate::models::{ComponentMetadata, LibraryInfo};
     use crate::schema::{initialize_schema, insert_component, insert_library};
 
     fn setup_test_db() -> Connection {

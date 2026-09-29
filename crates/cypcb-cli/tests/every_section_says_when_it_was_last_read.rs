@@ -573,46 +573,40 @@ fn is_count(word: &str) -> bool {
 /// **widened** the door rather than closing it - two paragraphs that had been
 /// failing started passing on the name of a helper.
 fn names_in_this_tree() -> BTreeSet<String> {
-    fn walk(dir: &Path, names: &mut BTreeSet<String>) {
-        let Ok(entries) = std::fs::read_dir(dir) else {
-            return;
+    names_in_tree(&repo_root())
+}
+
+fn names_in_tree(root: &Path) -> BTreeSet<String> {
+    let mut names = BTreeSet::new();
+    for file in tracked_files(root) {
+        let path = Path::new(&file);
+        if !file.starts_with("crates/")
+            || path.components().any(|c| c.as_os_str() == "target")
+            || path.extension().is_none_or(|e| e != "rs")
+        {
+            continue;
+        }
+        if path.parent().is_some_and(|p| p.ends_with("tests")) {
+            if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+                names.insert(stem.to_string());
+            }
+        }
+        let Ok(source) = std::fs::read_to_string(root.join(path)) else {
+            continue;
         };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                if path.file_name().is_some_and(|n| n == "target") {
-                    continue;
-                }
-                walk(&path, names);
-                continue;
-            }
-            if path.extension().is_none_or(|e| e != "rs") {
-                continue;
-            }
-            if path.parent().is_some_and(|p| p.ends_with("tests")) {
-                if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
-                    names.insert(stem.to_string());
-                }
-            }
-            let Ok(source) = std::fs::read_to_string(&path) else {
+        for (at, _) in source.match_indices("#[test]") {
+            let Some(fn_at) = source[at..].find("fn ") else {
                 continue;
             };
-            for (at, _) in source.match_indices("#[test]") {
-                let Some(fn_at) = source[at..].find("fn ") else {
-                    continue;
-                };
-                let name: String = source[at + fn_at + 3..]
-                    .chars()
-                    .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
-                    .collect();
-                if !name.is_empty() {
-                    names.insert(name);
-                }
+            let name: String = source[at + fn_at + 3..]
+                .chars()
+                .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+                .collect();
+            if !name.is_empty() {
+                names.insert(name);
             }
         }
     }
-    let mut names = BTreeSet::new();
-    walk(&repo_root().join("crates"), &mut names);
     names
 }
 
@@ -948,6 +942,24 @@ const SEARCHED: &[&str] = &["crates", "viewer/src", "viewer/e2e", "scripts"];
 /// Directories that hold no source anybody wrote.
 const NOT_SOURCE: &[&str] = &["target", "node_modules", "pkg", "dist", ".git"];
 
+/// Every file git tracks under `root`, as a path relative to it.
+///
+/// The checks over the canon used to walk the disk, and a checkout that has
+/// been worked in holds more than the repository does. The main checkout has
+/// carried `viewer/faebryk` since 2026-04, ignored and full of `.cpp` files, so
+/// `cpp` became an extension of this tree there and nowhere else: two KiCad
+/// file names the canon cites without a directory failed the check on the merge
+/// and passed in the worktree they were written in. What the repository holds
+/// is what git answers, whatever else is lying on the disk.
+fn tracked_files(root: &Path) -> Vec<String> {
+    cypcb_fixtures::tree::files_git_tracks(root)
+}
+
+/// A tracked file that sits under none of the `NOT_SOURCE` directories.
+fn is_source_file(file: &str) -> bool {
+    !file.split('/').any(|part| NOT_SOURCE.contains(&part))
+}
+
 /// The prefixes that make a backticked span a path rather than a phrase.
 const PATH_ROOTS: &[&str] = &[
     "crates/",
@@ -962,30 +974,16 @@ const PATH_ROOTS: &[&str] = &[
 /// read off the tree rather than listed here, because a list of extensions is a
 /// second place to keep the same fact.
 fn extensions_in_this_tree() -> BTreeSet<String> {
-    fn walk(dir: &Path, found: &mut BTreeSet<String>) {
-        let Ok(entries) = std::fs::read_dir(dir) else {
-            return;
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                let skip = path
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .is_some_and(|n| NOT_SOURCE.contains(&n));
-                if !skip {
-                    walk(&path, found);
-                }
-                continue;
-            }
-            if let Some(extension) = path.extension().and_then(|e| e.to_str()) {
-                found.insert(extension.to_ascii_lowercase());
-            }
-        }
-    }
-    let mut found = BTreeSet::new();
-    walk(&repo_root(), &mut found);
-    found
+    extensions_in_tree(&repo_root())
+}
+
+fn extensions_in_tree(root: &Path) -> BTreeSet<String> {
+    tracked_files(root)
+        .iter()
+        .filter(|file| is_source_file(file))
+        .filter_map(|file| Path::new(file).extension().and_then(|e| e.to_str()))
+        .map(str::to_ascii_lowercase)
+        .collect()
 }
 
 /// A backticked span that reads as a file **of a kind this repository holds**.
@@ -1024,20 +1022,19 @@ const NAMES_FLOOR: usize = 40;
 /// test whose name appears in no other file, and the check then found the name
 /// in its own justification. The stem still goes in - what is excluded is the
 /// text, not the file.
-fn read_source_tree(dir: &Path, stems: &mut BTreeSet<String>, text: &mut String, skip: &Path) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        let name = entry.file_name().to_string_lossy().to_string();
-        if NOT_SOURCE.contains(&name.as_str()) {
+fn read_source_tree(
+    root: &Path,
+    dir: &str,
+    stems: &mut BTreeSet<String>,
+    text: &mut String,
+    skip: &Path,
+) {
+    let under = format!("{}/", dir.trim_end_matches('/'));
+    for file in tracked_files(root) {
+        if !file.starts_with(&under) || !is_source_file(&file) {
             continue;
         }
-        if path.is_dir() {
-            read_source_tree(&path, stems, text, skip);
-            continue;
-        }
+        let path = root.join(&file);
         if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
             stems.insert(stem.to_string());
         }
@@ -1053,6 +1050,17 @@ fn read_source_tree(dir: &Path, stems: &mut BTreeSet<String>, text: &mut String,
             }
         }
     }
+}
+
+/// A cited path the repository holds: a tracked file, or a directory with one.
+fn is_in_tree(tracked: &BTreeSet<String>, cited: &str) -> bool {
+    let cited = cited.trim_end_matches('/');
+    let under = format!("{cited}/");
+    tracked.contains(cited)
+        || tracked
+            .range(under.clone()..)
+            .next()
+            .is_some_and(|file| file.starts_with(&under))
 }
 
 /// The text between backticks, which is how this document cites anything.
@@ -1078,7 +1086,7 @@ fn every_path_and_name_the_canon_cites_is_in_the_tree() {
     let mut stems = BTreeSet::new();
     let mut text = String::new();
     for dir in SEARCHED {
-        read_source_tree(&root.join(dir), &mut stems, &mut text, &itself);
+        read_source_tree(&root, dir, &mut stems, &mut text, &itself);
     }
 
     // The checks this file defines are cited by name in the canon and exist
@@ -1098,7 +1106,7 @@ fn every_path_and_name_the_canon_cites_is_in_the_tree() {
     let mut rule_stems = BTreeSet::new();
     let mut rule_text = String::new();
     for dir in ["crates/cypcb-drc/src", "crates/cypcb-rules/src"] {
-        read_source_tree(&root.join(dir), &mut rule_stems, &mut rule_text, &itself);
+        read_source_tree(&root, dir, &mut rule_stems, &mut rule_text, &itself);
     }
 
     let mut paths = 0usize;
@@ -1106,6 +1114,7 @@ fn every_path_and_name_the_canon_cites_is_in_the_tree() {
     let mut globs = 0usize;
     let mut unrooted: Vec<String> = Vec::new();
     let extensions = extensions_in_this_tree();
+    let tracked: BTreeSet<String> = tracked_files(&root).into_iter().collect();
     let mut missing_paths: Vec<String> = Vec::new();
     let mut names: BTreeSet<&str> = BTreeSet::new();
     for token in backticked(&canon) {
@@ -1135,7 +1144,7 @@ fn every_path_and_name_the_canon_cites_is_in_the_tree() {
             with_a_line += 1;
         }
         paths += 1;
-        if !root.join(file).exists() {
+        if !is_in_tree(&tracked, file) {
             missing_paths.push(token.to_string());
         }
     }
@@ -1510,7 +1519,7 @@ fn a_recorded_search_of_the_tree_still_returns_what_it_says() {
         let populated = Command::new("sh")
             .arg("-c")
             .arg(format!(
-                "grep -rlF --include=*.rs -- \"$1\" {scope} 2>/dev/null | head -1",
+                "git grep -lF -- \"$1\" -- '{scope}/*.rs' 2>/dev/null | head -1",
             ))
             .arg("sh")
             .arg("fn ")
@@ -1556,7 +1565,7 @@ fn a_recorded_search_of_the_tree_still_returns_what_it_says() {
         let output = Command::new("sh")
             .arg("-c")
             .arg(format!(
-                "grep -rlF --include=*.rs -- \"$1\" {scope} 2>/dev/null",
+                "git grep -lF -- \"$1\" -- '{scope}/*.rs' 2>/dev/null",
             ))
             .arg("sh")
             .arg(name)
@@ -1886,7 +1895,7 @@ fn the_table_of_searches_is_re_run_rather_than_read() {
             line.split('`')
                 .skip(1)
                 .step_by(2)
-                .find(|span| span.starts_with("grep -ril") && span.contains("--include="))
+                .find(|span| span.starts_with("git grep -il") && span.contains(" -- "))
         })
         .expect(
             "the paragraph above the table prints the command it ran, in backticks, and this \
@@ -1894,13 +1903,14 @@ fn the_table_of_searches_is_re_run_rather_than_read() {
              unreproducible by construction, and a scope kept here instead would be the copy \
              that goes stale while the section moves.",
         );
-    let include = command
-        .split_whitespace()
-        .find(|token| token.starts_with("--include="))
-        .expect("the command names what it searched");
-    let scope = command
-        .split_whitespace()
-        .last()
+    // The canon prints the `git grep` a reader runs; this runs the same search
+    // over the same pathspec, so an ignored tree in somebody's checkout is not
+    // counted as the repository's.
+    let pathspec = command
+        .rsplit(" -- ")
+        .next()
+        .map(|spec| spec.trim().trim_matches('\''))
+        .filter(|spec| !spec.is_empty())
         .expect("the command names where it searched");
 
     struct Row {
@@ -1972,7 +1982,7 @@ fn the_table_of_searches_is_re_run_rather_than_read() {
         let output = Command::new("sh")
             .arg("-c")
             .arg(format!(
-                "grep -rilF {include} -- \"$1\" {scope} 2>/dev/null"
+                "git grep -ilF -- \"$1\" -- '{pathspec}' 2>/dev/null"
             ))
             .arg("sh")
             .arg(term)
@@ -2506,6 +2516,128 @@ fn a_recorded_command_beside_a_figure_still_prints_it() {
     );
 }
 
+/// Below this the scan has stopped finding the commands rather than found them
+/// clean: 23 in the prose and 95 lines of the verification block on 2026-09-27.
+const COMMANDS_READ_FLOOR: usize = 118;
+
+/// **A recorded command reads what git tracks, not what the disk holds.** A
+/// checkout holds files a clone does not, and a shell glob, an `ls` or a
+/// `grep -r` counts them: with one extra file in every tracked directory the
+/// commands above stopped printing the figures their sentences state, on a tree
+/// the repository never held. `git ls-files` and `git grep` answer from the
+/// index, so the canon records those, and this holds every command it records -
+/// in the prose and in the verification block - to it.
+#[test]
+fn no_recorded_command_reads_the_disk() {
+    let root = repo_root();
+    let canon =
+        std::fs::read_to_string(root.join("docs/ROUTING-CANON.md")).expect("the canon is there");
+
+    let mut commands: Vec<String> = canon_prose_only(&canon)
+        .split('`')
+        .skip(1)
+        .step_by(2)
+        .map(|span| span.replace('\n', " "))
+        .filter(|span| {
+            span.contains(' ')
+                && span
+                    .split_whitespace()
+                    .next()
+                    .is_some_and(|tool| RECORDED_TOOLS.contains(&tool))
+        })
+        .collect();
+    let in_prose = commands.len();
+    let mut fenced = false;
+    for line in canon.lines() {
+        if line.trim_start().starts_with("```") {
+            fenced = !fenced;
+            continue;
+        }
+        if fenced && !line.trim().is_empty() && !line.trim_start().starts_with('#') {
+            commands.push(line.trim().to_owned());
+        }
+    }
+
+    let on_disk: Vec<&String> = commands.iter().filter(|c| reads_the_disk(c)).collect();
+    eprintln!(
+        "recorded commands read: {in_prose} in the prose, {} in the verification block; \
+         reading the disk: {}",
+        commands.len() - in_prose,
+        on_disk.len()
+    );
+    assert!(
+        on_disk.is_empty(),
+        "the canon records a command that reads the disk rather than the repository: \
+         {on_disk:#?}\n\
+         \n  Write it with `git ls-files` or `git grep`, and a glob as a pathspec in quotes - \
+         `':(glob)examples/*.cypcb'` for one directory, `'crates/*.rs'` for every depth."
+    );
+    assert!(
+        commands.len() >= COMMANDS_READ_FLOOR,
+        "this read {} recorded commands and expected at least {COMMANDS_READ_FLOOR}, so it is \
+         not reading the canon it thinks it is",
+        commands.len()
+    );
+}
+
+/// Whether a recorded command lists or searches the disk: a glob the shell
+/// expands, a recursive `grep`, or `find`. Quoted text is a pattern or a
+/// pathspec and is left out, and a `git` stage reads the index.
+fn reads_the_disk(command: &str) -> bool {
+    let command = command.split(" #").next().unwrap_or(command);
+    let mut unquoted = String::new();
+    let mut quote: Option<char> = None;
+    for c in command.chars() {
+        match quote {
+            Some(open) if c == open => quote = None,
+            Some(_) => {}
+            None if c == '\'' || c == '"' => quote = Some(c),
+            None => unquoted.push(c),
+        }
+    }
+    unquoted.split(['|', ';', '(', ')']).any(|stage| {
+        let words: Vec<&str> = stage.split_whitespace().collect();
+        let Some((tool, args)) = words.split_first() else {
+            return false;
+        };
+        if *tool == "git" {
+            return false;
+        }
+        let recursive = *tool == "grep"
+            && args.iter().any(|word| {
+                *word == "--recursive"
+                    || (word.starts_with('-')
+                        && !word.starts_with("--")
+                        && word.contains(['r', 'R']))
+            });
+        recursive || *tool == "find" || args.iter().any(|word| word.contains(['*', '?']))
+    })
+}
+
+#[test]
+fn a_command_that_reads_the_disk_is_told_from_one_that_reads_git() {
+    for disk in [
+        "ls examples/*.cypcb | wc -l",
+        "grep -l teardrop examples/*.cypcb | wc -l",
+        "grep -rn teardrop crates/cypcb-drc/src/",
+        "grep -rln min_stub --include=*.rs crates/ | wc -l",
+        "for f in tests/fixtures/benchmark/*.kicad_pcb; do",
+        "find crates -name '*.rs'",
+    ] {
+        assert!(reads_the_disk(disk), "{disk}");
+    }
+    for git in [
+        "git ls-files ':(glob)examples/*.cypcb' | wc -l",
+        "git grep -ln min_stub -- 'crates/*.rs' | wc -l",
+        "grep -c '#\\[test\\]' crates/cypcb-drc/src/rules/pad_entry.rs",
+        "for f in $(git ls-files ':(glob)tests/fixtures/benchmark/*.kicad_pcb'); do",
+        "grep -hE \"^\\s*\\(at [-0-9.]+\\)\" file.kicad_pcb # the two, printed",
+        "ls crates/cypcb-drc/src/rules/unrouted_pin.rs",
+    ] {
+        assert!(!reads_the_disk(git), "{git}");
+    }
+}
+
 const RECORDED_RANGES_FLOOR: usize = 19;
 
 /// **A recorded `sed -n 'A,Bp'` is a line number with a command around it, and
@@ -2586,6 +2718,23 @@ const VERIFICATION_TOOLS: &[&str] = &[
 ];
 
 const VERIFICATION_COMMANDS_FLOOR: usize = 46;
+
+/// `line` without the `N:` or `path:N:` that `grep -n` writes in front of it.
+fn without_line_number(line: &str) -> &str {
+    let numbered = |text: &str| -> Option<usize> {
+        let digits = text.bytes().take_while(u8::is_ascii_digit).count();
+        (digits > 0 && text.as_bytes().get(digits) == Some(&b':')).then_some(digits + 1)
+    };
+    if let Some(cut) = numbered(line) {
+        return &line[cut..];
+    }
+    if let Some(colon) = line.find(':') {
+        if let Some(cut) = numbered(&line[colon + 1..]) {
+            return &line[colon + 1 + cut..];
+        }
+    }
+    line
+}
 
 /// Figures this document states that its own verification blocks never print.
 /// Each comes from a standard, a vendor's page or one run of the router, and
@@ -2670,7 +2819,13 @@ fn every_command_in_a_verification_block_still_runs() {
             .current_dir(&root)
             .output()
             .expect("a shell runs");
-        printed.push_str(&String::from_utf8_lossy(&output.stdout));
+        // A line number `grep -n` puts in front of a line is where the text
+        // sits, not a figure it states: `fn nets_needing_reroute` moving to
+        // line 1500 read as the canon's 1500 points turning up in a block.
+        for line in String::from_utf8_lossy(&output.stdout).lines() {
+            printed.push_str(without_line_number(line));
+            printed.push('\n');
+        }
         if output.status.code() == Some(2) {
             broken.push(format!(
                 "{command}\n    {}",
@@ -3023,5 +3178,89 @@ fn a_rule_tagged_as_a_standard_names_one() {
          {STANDARD_TAGGED_RULES_FLOOR}\n\
          \n  A tag that quietly disappears takes its rule out of every check keyed to it, and \
          the tags are the only record of where these figures came from."
+    );
+}
+
+/// The walks above read what git tracks, and a file git does not track changes
+/// none of their answers. The tree is built for the purpose, with the two KiCad
+/// file names that failed the merge lying in it untracked. The same files, once
+/// added, change every answer: that is the control showing each walk reads the
+/// tree at all, rather than agreeing with itself by reading nothing.
+#[test]
+fn a_file_git_does_not_track_is_not_in_the_tree() {
+    let root = std::env::temp_dir().join(format!("canon-untracked-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("a scratch directory");
+    let write = |file: &str, body: &str| {
+        let path = root.join(file);
+        std::fs::create_dir_all(path.parent().unwrap()).expect("a scratch directory");
+        std::fs::write(path, body).expect("a scratch file");
+    };
+    let git = |args: &[&str]| {
+        let status = Command::new("git")
+            .args(args)
+            .current_dir(&root)
+            .status()
+            .expect("git runs");
+        assert!(status.success(), "git {args:?} failed");
+    };
+    git(&["init", "-q"]);
+    write("crates/a/src/lib.rs", "pub fn f() {}\n");
+    write(
+        "crates/a/tests/tracked_check.rs",
+        "#[test]\nfn tracked_case() {}\n",
+    );
+    git(&["add", "."]);
+
+    let answers = || {
+        let mut stems = BTreeSet::new();
+        let mut text = String::new();
+        read_source_tree(&root, "crates", &mut stems, &mut text, Path::new(""));
+        let tracked: BTreeSet<String> = tracked_files(&root).into_iter().collect();
+        (
+            extensions_in_tree(&root),
+            names_in_tree(&root),
+            stems,
+            text,
+            is_in_tree(&tracked, "crates/b/src/shape_collisions.cpp"),
+            is_in_tree(&tracked, "crates/b/"),
+        )
+    };
+    let without = answers();
+    write("crates/b/src/shape_collisions.cpp", "// untracked\n");
+    write("crates/b/src/connectivity_algo.cpp", "// untracked\n");
+    write("crates/b/src/zz_untracked.rs", "fn untracked_helper() {}\n");
+    write(
+        "crates/b/tests/untracked_check.rs",
+        "#[test]\nfn untracked_case() {}\n",
+    );
+    let with_untracked = answers();
+    git(&["add", "."]);
+    let once_added = answers();
+    let _ = std::fs::remove_dir_all(&root);
+
+    assert_eq!(
+        without.0,
+        BTreeSet::from(["rs".to_string()]),
+        "the tracked tree holds one kind of file"
+    );
+    assert!(
+        !without.4 && !without.5,
+        "a path with nothing tracked under it was read as in the tree"
+    );
+    assert_eq!(
+        with_untracked, without,
+        "a file git does not track changed what the canon checks read as the tree"
+    );
+    assert!(
+        once_added.0.contains("cpp")
+            && once_added.1.contains("untracked_case")
+            && once_added.1.contains("untracked_check")
+            && once_added.2.contains("shape_collisions")
+            && once_added.3.contains("untracked_helper")
+            && once_added.4
+            && once_added.5,
+        "the same files, tracked, are not seen: the walks are reading nothing, and the \
+         equality above holds by it. Read: {once_added:?}"
     );
 }

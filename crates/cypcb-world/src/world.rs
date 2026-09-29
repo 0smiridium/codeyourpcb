@@ -415,7 +415,8 @@ impl BoardWorld {
     /// # Arguments
     ///
     /// * `footprint_bounds` - Function to get bounds for a footprint name.
-    ///   Used to calculate entity bounding boxes.
+    ///   Used to calculate entity bounding boxes, turned with the part and
+    ///   moved to it by [`place_box`].
     ///
     /// # Example
     ///
@@ -439,20 +440,22 @@ impl BoardWorld {
         let mut entries = Vec::new();
 
         // Query all positioned entities with footprints
-        let mut query = self.world.query::<(Entity, &Position, &FootprintRef)>();
-
-        for (entity, position, footprint) in query.iter(&self.world) {
-            let bounds = footprint_bounds(footprint.as_str());
-            let pos = position.0;
-
-            // Translate bounds by position
-            let min = Point::new(Nm(pos.x.0 + bounds.min.x.0), Nm(pos.y.0 + bounds.min.y.0));
-            let max = Point::new(Nm(pos.x.0 + bounds.max.x.0), Nm(pos.y.0 + bounds.max.y.0));
+        for (entity, position, footprint, rotation) in
+            in_build_order::<(Entity, &Position, &FootprintRef, Option<&Rotation>)>(&mut self.world)
+        {
+            // The footprint's box turned with the part and moved to it
+            let placed = place_box(
+                position.0,
+                footprint_bounds(footprint.as_str()),
+                rotation.copied().unwrap_or(Rotation::ZERO),
+            );
 
             // Default to all layers for now (could be refined with pad layer info)
             let layer_mask = 0xFFFFFFFF;
 
-            entries.push(SpatialEntry::new(entity, min, max, layer_mask));
+            entries.push(SpatialEntry::new(
+                entity, placed.min, placed.max, layer_mask,
+            ));
         }
 
         self.world.resource_mut::<SpatialIndex>().rebuild(entries);
@@ -477,23 +480,28 @@ impl BoardWorld {
 
         // Index components (same as rebuild_spatial_index)
         {
-            let mut query = self.world.query::<(Entity, &Position, &FootprintRef)>();
-            for (entity, position, footprint) in query.iter(&self.world) {
-                let bounds = footprint_bounds(footprint.as_str());
-                let pos = position.0;
-                let min = Point::new(Nm(pos.x.0 + bounds.min.x.0), Nm(pos.y.0 + bounds.min.y.0));
-                let max = Point::new(Nm(pos.x.0 + bounds.max.x.0), Nm(pos.y.0 + bounds.max.y.0));
+            for (entity, position, footprint, rotation) in
+                in_build_order::<(Entity, &Position, &FootprintRef, Option<&Rotation>)>(
+                    &mut self.world,
+                )
+            {
+                let placed = place_box(
+                    position.0,
+                    footprint_bounds(footprint.as_str()),
+                    rotation.copied().unwrap_or(Rotation::ZERO),
+                );
                 let layer_mask = 0xFFFFFFFF;
-                entries.push(SpatialEntry::new(entity, min, max, layer_mask));
+                entries.push(SpatialEntry::new(
+                    entity, placed.min, placed.max, layer_mask,
+                ));
             }
         }
 
         // Index trace segments
         {
-            let mut query = self
-                .world
-                .query::<(Entity, &crate::components::trace::Trace)>();
-            for (entity, trace) in query.iter(&self.world) {
+            for (entity, trace) in
+                in_build_order::<(Entity, &crate::components::trace::Trace)>(&mut self.world)
+            {
                 let half_width = trace.width.0 / 2;
                 let layer_mask = trace.layer.to_copper_mask();
                 for seg in &trace.segments {
@@ -510,10 +518,9 @@ impl BoardWorld {
 
         // Index vias
         {
-            let mut query = self
-                .world
-                .query::<(Entity, &crate::components::trace::Via)>();
-            for (entity, via) in query.iter(&self.world) {
+            for (entity, via) in
+                in_build_order::<(Entity, &crate::components::trace::Via)>(&mut self.world)
+            {
                 let radius = via.outer_diameter.0 / 2;
                 let cx = via.position.x.0;
                 let cy = via.position.y.0;
@@ -644,8 +651,7 @@ impl BoardWorld {
 
     /// Get the number of component entities (excluding board).
     pub fn component_count(&mut self) -> usize {
-        let mut query = self.world.query::<&RefDes>();
-        query.iter(&self.world).count()
+        in_build_order::<&RefDes>(&mut self.world).len()
     }
 
     /// Check if the world is empty (no entities).
@@ -708,9 +714,8 @@ impl BoardWorld {
     /// assert_eq!(world.find_by_refdes("R2"), None);
     /// ```
     pub fn find_by_refdes(&mut self, refdes: &str) -> Option<Entity> {
-        let mut query = self.world.query::<(Entity, &RefDes)>();
-        query
-            .iter(&self.world)
+        in_build_order::<(Entity, &RefDes)>(&mut self.world)
+            .into_iter()
             .find(|(_, r)| r.as_str() == refdes)
             .map(|(e, _)| e)
     }
@@ -720,9 +725,8 @@ impl BoardWorld {
     /// Returns a vector of (Entity, RefDes clone, Position clone) tuples.
     /// Uses clones to avoid lifetime issues with the query.
     pub fn components(&mut self) -> Vec<(Entity, RefDes, Position)> {
-        let mut query = self.world.query::<(Entity, &RefDes, &Position)>();
-        query
-            .iter(&self.world)
+        in_build_order::<(Entity, &RefDes, &Position)>(&mut self.world)
+            .into_iter()
             .map(|(e, r, p)| (e, r.clone(), *p))
             .collect()
     }
@@ -732,9 +736,8 @@ impl BoardWorld {
     /// Returns a vector of (Entity, Zone clone) tuples.
     /// Uses clones to avoid lifetime issues with the query.
     pub fn zones(&mut self) -> Vec<(Entity, Zone)> {
-        let mut query = self.world.query::<(Entity, &Zone)>();
-        query
-            .iter(&self.world)
+        in_build_order::<(Entity, &Zone)>(&mut self.world)
+            .into_iter()
             .map(|(e, z)| (e, z.clone()))
             .collect()
     }

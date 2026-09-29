@@ -33,9 +33,8 @@ const NOT_YET: &[(&str, &str)] = &[
 ];
 
 fn covered_examples() -> Vec<PathBuf> {
-    let mut files: Vec<PathBuf> = std::fs::read_dir(examples_dir())
-        .expect("the examples directory is there")
-        .filter_map(|entry| entry.ok().map(|e| e.path()))
+    let mut files: Vec<PathBuf> = cypcb_fixtures::tree::tracked_in(examples_dir())
+        .into_iter()
         .filter(|path| path.extension().is_some_and(|ext| ext == "cypcb"))
         .filter(|path| {
             let name = path
@@ -100,6 +99,13 @@ fn the_two_readers_agree_on_every_board_the_new_one_claims() {
             differences.push(format!("{name}: the reader reported {:?}", actual.errors));
             continue;
         }
+        if !expected.errors.is_empty() {
+            differences.push(format!(
+                "{name}: tree-sitter reported {:?}",
+                expected.errors
+            ));
+            continue;
+        }
         definitions_compared += expected.value.definitions.len();
         let (expected, actual) = (shape(&expected.value), shape(&actual.value));
         if expected != actual {
@@ -147,4 +153,60 @@ fn a_board_the_reader_covers_still_reports_what_it_cannot_read() {
         !result.errors.is_empty(),
         "a board with no name is an error, got none"
     );
+}
+
+#[test]
+fn both_readers_place_a_courtyard_where_the_file_says() {
+    // No example states a courtyard's centre, so the corpus above cannot tell
+    // a reader that ignores `at` from one that reads it. A KiCad footprint's
+    // origin is often pin 1, and this is the form a saved KiCad board uses.
+    let source =
+        "footprint HEADER {\n    pad 1 rect at 0mm, 0mm size 1.7mm x 1.7mm drill 1mm\n    \
+                  courtyard 2.2mm x 4.74mm at 0mm, -1.27mm\n}\n\
+                  footprint PLAIN {\n    courtyard 2mm x 1mm\n}\n";
+    let (expected, actual) = (parse(source), reader::read(source));
+    assert!(expected.errors.is_empty(), "{:?}", expected.errors);
+    assert!(actual.errors.is_empty(), "{:?}", actual.errors);
+    assert_eq!(shape(&expected.value), shape(&actual.value));
+
+    let centres: Vec<Option<(f64, f64)>> = actual
+        .value
+        .definitions
+        .iter()
+        .filter_map(|definition| match definition {
+            cypcb_parser::Definition::Footprint(fp) => Some(
+                fp.courtyard_centre
+                    .as_ref()
+                    .map(|(x, y)| (x.value, y.value)),
+            ),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(centres, vec![Some((0.0, -1.27)), None]);
+}
+
+#[test]
+fn both_readers_keep_a_footprint_named_with_its_library_whole() {
+    // A design names an index footprint `kicad::<library>:<name>`. The name is
+    // a quoted string to both readers, so the `::` and the `:` in it are text
+    // and not syntax, and the name reaches the index whole.
+    let source = "component U1 ic \"kicad::Package_TO_SOT_SMD:SOT-23-5\" {\n    \
+                  at 5mm, 5mm\n}\n";
+    let (expected, actual) = (parse(source), reader::read(source));
+    assert!(expected.errors.is_empty(), "{:?}", expected.errors);
+    assert!(actual.errors.is_empty(), "{:?}", actual.errors);
+    assert_eq!(shape(&expected.value), shape(&actual.value));
+
+    let names: Vec<&str> = actual
+        .value
+        .definitions
+        .iter()
+        .filter_map(|definition| match definition {
+            cypcb_parser::Definition::Component(component) => {
+                Some(component.footprint.value.as_str())
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(names, ["kicad::Package_TO_SOT_SMD:SOT-23-5"]);
 }

@@ -69,7 +69,7 @@ fn every_test_point_record_sits_in_its_columns() {
         String::from_utf8_lossy(&run.stderr)
     );
 
-    let file = std::fs::read_dir(out.join("netlist"))
+    let file = cypcb_fixtures::tree::written_entries(out.join("netlist"))
         .expect("the netlist folder is there")
         .flatten()
         .map(|entry| entry.path())

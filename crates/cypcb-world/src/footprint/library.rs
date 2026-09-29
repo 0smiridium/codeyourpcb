@@ -6,7 +6,7 @@ use bevy_ecs::prelude::Resource;
 
 use cypcb_core::{Nm, Point, Rect};
 
-use crate::components::{Layer, PadShape};
+use crate::components::{place_pad, rotate_about_origin, Layer, PadShape, Rotation};
 
 /// A single pad definition within a footprint.
 ///
@@ -18,7 +18,7 @@ use crate::components::{Layer, PadShape};
 ///
 /// ```
 /// use cypcb_world::footprint::PadDef;
-/// use cypcb_world::components::{PadShape, Layer};
+/// use cypcb_world::components::{PadShape, Layer, Rotation};
 /// use cypcb_core::{Nm, Point};
 ///
 /// // SMD pad (no drill)
@@ -31,6 +31,7 @@ use crate::components::{Layer, PadShape};
 ///     slot: None,
 ///     layers: vec![Layer::TopCopper, Layer::TopPaste, Layer::TopMask],
 ///     mask_margin: None,
+///     rotation: Rotation::ZERO,
 /// };
 ///
 /// // Through-hole pad (with drill)
@@ -43,6 +44,7 @@ use crate::components::{Layer, PadShape};
 ///     slot: None,
 ///     layers: vec![Layer::TopCopper, Layer::BottomCopper],
 ///     mask_margin: None,
+///     rotation: Rotation::ZERO,
 /// };
 /// ```
 #[derive(Debug, Clone)]
@@ -91,6 +93,37 @@ pub struct PadDef {
     /// `viewer/svg-pcb/kicad-components`. Dropped until now, so those pads
     /// were exported with the board's figure instead of their own.
     pub mask_margin: Option<Nm>,
+    /// How far this pad is turned inside its footprint, before the part is
+    /// turned on the board.
+    ///
+    /// `ZERO` is nearly every pad. A pad states one when the part holds a pad
+    /// across its own axes: a pin header drawn with its pads long in y, a
+    /// module whose castellations run down one edge. KiCad writes it as the
+    /// third number of the pad's `(at x y angle)`, and dropping it lays the
+    /// pad down across its neighbours - `fab-1X04` imported without it put
+    /// four 1.524 by 3.048 pads 2.54 apart lying long in x, each one running
+    /// 0.508 into the next (measured 2026-09-26).
+    pub rotation: Rotation,
+}
+
+/// One pad as it lands on the board: where, what shape, and how big along the
+/// board's own axes.
+///
+/// A footprint states its pads in its own frame; a part is placed turned. The
+/// Gerber writers, the checker and the viewer all need the turned pad, and
+/// each used to turn it - or not - by itself. The Gerber writers did not:
+/// they flashed an 0805 turned 90 degrees with the aperture of the unturned
+/// part, 1.0 wide and 1.45 tall where the copper is 1.45 wide and 1.0 tall,
+/// while the checker swapped the two and passed a board nobody was sent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PadOutline {
+    /// The pad's centre on the board.
+    pub centre: Point,
+    /// The pad's shape.
+    pub shape: PadShape,
+    /// Width along the board's x, height along its y, once every quarter turn
+    /// of the part is taken up by swapping the pad's own two sides.
+    pub size: (Nm, Nm),
 }
 
 impl PadDef {
@@ -178,12 +211,38 @@ impl PadDef {
         matches!(self.slot, Some((width, height)) if width != height)
     }
 
-    /// Half the distance the milling bit travels, in the pad's own frame.
+    /// This pad as it lands on the board, for a part at `at` turned `rotation`.
+    ///
+    /// The one place a pad is turned: the position through [`place_pad`] by
+    /// the part's turn alone, since the pad turns about its own centre; the
+    /// sides swapped for every odd quarter turn of the part's turn and the
+    /// pad's own [`rotation`](Self::rotation) added together. A turn between
+    /// quarter turns stands the pad at an angle a width and a height cannot
+    /// state; this takes the quarter turn below it, and no board in this
+    /// repository places a part or a pad that way (every `rotate` in its
+    /// designs is 90, 180 or 270, measured 2026-09-26).
+    pub fn outline(&self, at: Point, rotation: Rotation) -> PadOutline {
+        let turn = (rotation.0 + self.rotation.0).rem_euclid(360_000);
+        let (width, height) = self.size;
+        let size = if (turn / 90_000) % 2 == 1 {
+            (height, width)
+        } else {
+            (width, height)
+        };
+        PadOutline {
+            centre: place_pad(at, self.position, rotation),
+            shape: self.shape,
+            size,
+        }
+    }
+
+    /// Half the distance the milling bit travels, in the footprint's frame.
     ///
     /// A slot `(w, h)` is cut with a bit the width of its narrow dimension
     /// moving along the long one, so the bit's centre stops half a bit short
-    /// of each end and the travel is `long - narrow`. The two ends of the hole
-    /// are the pad's position plus and minus this.
+    /// of each end and the travel is `long - narrow`, along the pad's own
+    /// axes turned by the pad's own [`rotation`](Self::rotation). The two ends
+    /// of the hole are the pad's position plus and minus this.
     ///
     /// `None` for a round hole, whose two ends are the same point. It lives
     /// here rather than in the drill writer because the checker needs the same
@@ -195,11 +254,15 @@ impl PadDef {
         if width == height {
             return None;
         }
-        Some(if width > height {
+        let along_the_pad = if width > height {
             Point::new(Nm((width.0 - height.0) / 2), Nm(0))
         } else {
             Point::new(Nm(0), Nm((height.0 - width.0) / 2))
-        })
+        };
+        Some(rotate_about_origin(
+            along_the_pad,
+            self.rotation.to_degrees(),
+        ))
     }
 
     /// The hole as the path of the bit's centre, in the footprint's frame,
@@ -368,6 +431,104 @@ impl Footprint {
         self
     }
 
+    /// The point a pick-and-place file gives for this part, in footprint
+    /// coordinates.
+    ///
+    /// The assembler asks for "the component centroid" and does not define
+    /// it; for KiCad files it points at the Fabrication Toolkit plugin
+    /// (guide read 2026-09-26), so this follows that plugin
+    /// (`plugins/process.py` at commit 642b069c, read 2026-09-26):
+    ///
+    /// - "if attributes & pcbnew.FP_SMD: origin_type = 'Anchor'" - a
+    ///   surface-mount part is placed by its origin. KLC F6.2 (read
+    ///   2026-09-26) puts that origin on the body: "For most standard
+    ///   components, the anchor should generally be located on the centroid
+    ///   of the component body."
+    /// - "else: origin_type = 'Center'", and the centre is the pads'
+    ///   bounding box: "get bounding box based on pads only to ignore
+    ///   non-copper layers" ... "position = bbox.GetCenter()". A
+    ///   through-hole part's origin sits on pin 1 (KLC F7.2), not in its
+    ///   middle.
+    /// - With no pads the plugin falls back to the origin.
+    ///
+    /// Which kind a part is comes from [`Footprint::is_surface_mount`], not
+    /// from a stored attribute. The box is every pad's `size` rectangle about
+    /// its centre, holes without copper included, as the plugin's `Pads()`
+    /// includes them.
+    pub fn placement_centre(&self) -> Point {
+        if self.is_surface_mount() || self.pads.is_empty() {
+            return Point::ORIGIN;
+        }
+        let mut min_x = i64::MAX;
+        let mut min_y = i64::MAX;
+        let mut max_x = i64::MIN;
+        let mut max_y = i64::MIN;
+        for pad in &self.pads {
+            let half_width = pad.size.0.raw() / 2;
+            let half_height = pad.size.1.raw() / 2;
+            min_x = min_x.min(pad.position.x.raw() - half_width);
+            min_y = min_y.min(pad.position.y.raw() - half_height);
+            max_x = max_x.max(pad.position.x.raw() + half_width);
+            max_y = max_y.max(pad.position.y.raw() + half_height);
+        }
+        Point::new(Nm((min_x + max_x) / 2), Nm((min_y + max_y) / 2))
+    }
+
+    /// Whether this part is surface-mount: it has a copper pad without a
+    /// hole and no plated hole.
+    ///
+    /// Read from the pads the way KiCad derives a footprint's likely type
+    /// (`FOOTPRINT::GetLikelyAttribute`, read 2026-09-26): a plated hole makes
+    /// the part through-hole even beside surface pads - "Footprints with
+    /// plated through-hole pads should usually be marked through hole even if
+    /// they also have SMD" - and a hole with no copper, a locating peg,
+    /// counts for neither.
+    pub fn is_surface_mount(&self) -> bool {
+        let plated_hole = self
+            .pads
+            .iter()
+            .any(|pad| pad.drill.is_some() && !pad.is_non_plated());
+        let surface_pad = self
+            .pads
+            .iter()
+            .any(|pad| pad.drill.is_none() && pad.layers.iter().any(|layer| layer.is_copper()));
+        surface_pad && !plated_hole
+    }
+
+    /// Pads whose copper reaches past the courtyard, each with how far it
+    /// reaches, in pad order.
+    ///
+    /// The courtyard is everything the part occupies, and per IPC-7351 that
+    /// includes the land pattern. A pad outside it is copper that no reader of
+    /// the courtyard knows about: the spatial index, `courtyard-clearance` and
+    /// the placer all take the box at its word. A pad is measured as the
+    /// rectangle `size` wide and high about its centre. That holds a round or
+    /// oblong pad and is exact for a square one, with its sides taken along
+    /// the footprint's axes once the pad's own turn is taken up.
+    pub fn pads_outside_courtyard(&self) -> Vec<(&PadDef, Nm)> {
+        let court = self.courtyard;
+        self.pads
+            .iter()
+            .filter_map(|pad| {
+                let (width, height) = pad.outline(Point::ORIGIN, Rotation::ZERO).size;
+                let half_w = width.raw() / 2;
+                let half_h = height.raw() / 2;
+                let x = pad.position.x.raw();
+                let y = pad.position.y.raw();
+                let reach = [
+                    court.min.x.raw() - (x - half_w),
+                    (x + half_w) - court.max.x.raw(),
+                    court.min.y.raw() - (y - half_h),
+                    (y + half_h) - court.max.y.raw(),
+                ]
+                .into_iter()
+                .max()
+                .unwrap_or(0);
+                (reach > 0).then_some((pad, Nm(reach)))
+            })
+            .collect()
+    }
+
     /// Get a pad by its number/name.
     pub fn get_pad(&self, number: &str) -> Option<&PadDef> {
         self.pads.iter().find(|p| p.number == number)
@@ -411,6 +572,16 @@ pub struct FootprintLibrary {
     /// Footprints registered from a design source, mapped to whatever entry they
     /// shadowed, so [`clear_design`](FootprintLibrary::clear_design) can undo them.
     design_defined: HashMap<String, Option<Footprint>>,
+    /// Names a source was asked for and could not be read, with why. The sync
+    /// reports these instead of an unknown footprint: the name may well be in
+    /// a file nobody could open.
+    unreadable: HashMap<String, String>,
+    /// Names a source holds more than once, with each one it could mean.
+    /// The sync reports these: the source does not pick one for the design.
+    ambiguous: HashMap<String, Vec<String>>,
+    /// Names a source resolved, with the full name of what it found, when
+    /// the design wrote it shorter.
+    spelled_out: HashMap<String, String>,
 }
 
 impl FootprintLibrary {
@@ -523,6 +694,41 @@ impl FootprintLibrary {
         self.footprints.contains_key(name)
     }
 
+    /// Record that `name` was asked of a source that could not be read.
+    pub fn mark_unreadable(&mut self, name: impl Into<String>, why: impl Into<String>) {
+        self.unreadable.insert(name.into(), why.into());
+    }
+
+    /// Why `name` is missing, when it was asked of a source that could not
+    /// be read.
+    pub fn why_unreadable(&self, name: &str) -> Option<&str> {
+        self.unreadable.get(name).map(String::as_str)
+    }
+
+    /// Record that a source holds `name` more than once, and what each one
+    /// is called in full.
+    pub fn mark_ambiguous(&mut self, name: impl Into<String>, candidates: Vec<String>) {
+        self.ambiguous.insert(name.into(), candidates);
+    }
+
+    /// Every footprint `name` could mean, in full, when its source holds it
+    /// more than once.
+    pub fn candidates_for(&self, name: &str) -> Option<&[String]> {
+        self.ambiguous.get(name).map(Vec::as_slice)
+    }
+
+    /// Record that the footprint registered as `name` is called `full` by
+    /// its source.
+    pub fn spell_out(&mut self, name: impl Into<String>, full: impl Into<String>) {
+        self.spelled_out.insert(name.into(), full.into());
+    }
+
+    /// The full name of the footprint registered as `name`: what its source
+    /// calls it, or `name` itself.
+    pub fn full_name<'a>(&'a self, name: &'a str) -> &'a str {
+        self.spelled_out.get(name).map_or(name, String::as_str)
+    }
+
     /// Register all built-in SMD footprints.
     fn register_builtin_smd(&mut self) {
         use super::smd::*;
@@ -594,6 +800,8 @@ pub fn mirrored_to_bottom(footprint: &Footprint) -> Footprint {
                 slot: None,
                 layers: pad.layers.iter().map(|layer| flip(*layer)).collect(),
                 mask_margin: None,
+                // A mirror runs a turn the other way.
+                rotation: Rotation((-pad.rotation.0).rem_euclid(360_000)),
             })
             .collect(),
         bounds: mirror_rect(footprint.bounds),
@@ -807,6 +1015,7 @@ mod tests {
             slot: None,
             layers: vec![Layer::TopCopper],
             mask_margin: None,
+            rotation: Rotation::ZERO,
         };
         assert!(smd.is_smd());
         assert!(!smd.is_through_hole());
@@ -820,6 +1029,7 @@ mod tests {
             slot: None,
             layers: vec![Layer::TopCopper, Layer::BottomCopper],
             mask_margin: None,
+            rotation: Rotation::ZERO,
         };
         assert!(!tht.is_smd());
         assert!(tht.is_through_hole());
@@ -890,5 +1100,53 @@ mod tests {
         assert!(fp.get_pad("17").is_some()); // Start of top side
         assert!(fp.get_pad("24").is_some()); // End of top side
         assert!(fp.get_pad("25").is_some()); // Start of left side
+    }
+
+    /// A header pad drawn long in y and turned a quarter inside its
+    /// footprint, the way `fab-1X04` states its pads.
+    fn header_pad(rotation: Rotation) -> PadDef {
+        PadDef {
+            number: "1".into(),
+            shape: PadShape::Oblong,
+            position: Point::from_mm(2.54, 0.0),
+            size: (Nm::from_mm(1.524), Nm::from_mm(3.048)),
+            drill: Some(Nm::from_mm(1.0)),
+            slot: None,
+            layers: vec![Layer::TopCopper, Layer::BottomCopper],
+            mask_margin: None,
+            rotation,
+        }
+    }
+
+    #[test]
+    fn a_pad_turned_in_its_footprint_lands_turned() {
+        let pad = header_pad(Rotation::DEG_90);
+        let outline = pad.outline(Point::from_mm(10.0, 10.0), Rotation::ZERO);
+        assert_eq!(outline.size, (Nm::from_mm(3.048), Nm::from_mm(1.524)));
+        assert_eq!(outline.centre, Point::from_mm(12.54, 10.0));
+    }
+
+    #[test]
+    fn a_turned_pad_on_a_turned_part_adds_the_two_turns() {
+        let pad = header_pad(Rotation::DEG_90);
+        let outline = pad.outline(Point::from_mm(10.0, 10.0), Rotation::DEG_90);
+        assert_eq!(outline.size, (Nm::from_mm(1.524), Nm::from_mm(3.048)));
+        let unturned =
+            header_pad(Rotation::ZERO).outline(Point::from_mm(10.0, 10.0), Rotation::DEG_90);
+        assert_eq!(outline.centre, unturned.centre);
+    }
+
+    #[test]
+    fn a_pad_turned_on_the_top_turns_the_other_way_on_the_bottom() {
+        let footprint = Footprint {
+            name: "HDR".into(),
+            description: String::new(),
+            pads: vec![header_pad(Rotation::DEG_90)],
+            bounds: Rect::from_points(Point::ORIGIN, Point::ORIGIN),
+            courtyard: Rect::from_points(Point::ORIGIN, Point::ORIGIN),
+            silk: Vec::new(),
+        };
+        let bottom = mirrored_to_bottom(&footprint);
+        assert_eq!(bottom.pads[0].rotation, Rotation::DEG_270);
     }
 }

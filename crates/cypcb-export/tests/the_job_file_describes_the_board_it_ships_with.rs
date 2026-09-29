@@ -54,6 +54,7 @@ fn exported(name: &str, world: &mut BoardWorld) -> (Value, Exported) {
         output_dir: dir.clone(),
         preset: from_name("jlcpcb").expect("the preset is there"),
         board_name: "sensor_hub".to_string(),
+        stamp: cypcb_export::stamp::Stamp::UNIX_EPOCH,
     };
     let library = FootprintLibrary::new();
     run_export(&job, world, &library).expect("the export runs");
@@ -99,7 +100,7 @@ fn manufacturing_files(dir: &std::path::Path) -> Vec<String> {
     let mut found: Vec<String> = ["gerber", "drill"]
         .iter()
         .flat_map(|sub| {
-            std::fs::read_dir(dir.join(sub))
+            cypcb_fixtures::tree::written_entries(dir.join(sub))
                 .into_iter()
                 .flatten()
                 .filter_map(move |entry| {

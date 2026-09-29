@@ -26,7 +26,9 @@
 use cypcb_core::Point;
 use cypcb_world::components::trace::{Trace, Via};
 use cypcb_world::components::zone::{Zone, ZoneKind};
-use cypcb_world::components::{FootprintRef, NetConnections, Position, RefDes, Rotation};
+use cypcb_world::components::Layer;
+use cypcb_world::components::{FootprintRef, NetConnections, NetId, Position, RefDes, Rotation};
+use cypcb_world::in_build_order;
 use cypcb_world::{BoardWorld, Entity};
 use hashbrown::HashMap;
 use rstar::AABB;
@@ -44,24 +46,86 @@ use super::DrcRule;
 /// Rule for a net whose copper does not join all of its pins.
 pub struct NetSplitRule;
 
-/// A pin, as a piece of a net's copper names it.
-struct Pin {
-    label: String,
-    entity: Entity,
-    at: Point,
-    /// Whether `UnroutedPinRule` counts copper as reaching it.
-    reached: bool,
+/// A pad of a net, as a piece of that net's copper holds it.
+#[derive(Clone, Debug)]
+pub struct PiecePin {
+    /// `R1.2`: the part and the pad number.
+    pub label: String,
+    /// The part the pad belongs to.
+    pub entity: Entity,
+    /// The pad number, as the footprint names it.
+    pub pin: String,
+    /// The centre of the pad on the board.
+    pub at: Point,
+    /// Whether copper reaches it: a trace, a via, a pour or another pad of
+    /// its net that it touches. `UnroutedPinRule` reports the pads for which
+    /// this is false.
+    pub reached: bool,
+}
+
+/// A trace segment, as a piece of copper holds it.
+#[derive(Clone, Copy, Debug)]
+pub struct PieceSegment {
+    /// The layer the segment is on.
+    pub layer: Layer,
+    /// One end.
+    pub start: Point,
+    /// The other end.
+    pub end: Point,
+    /// Half the trace width.
+    pub half_width: i64,
+}
+
+/// Copper of one net that touches itself: the pads, segments, vias and pours
+/// joined into one conductor.
+#[derive(Clone, Debug, Default)]
+pub struct CopperPiece {
+    /// The pads in it.
+    pub pins: Vec<PiecePin>,
+    /// The trace segments in it.
+    pub segments: Vec<PieceSegment>,
+    /// The vias in it.
+    pub vias: Vec<Via>,
+    /// Whether a pour's outline is part of it.
+    pub pour: bool,
+}
+
+impl CopperPiece {
+    /// Whether it holds any copper beyond pads: a pad on its own is a pin
+    /// nothing reaches, not a conductor.
+    pub fn is_conductor(&self) -> bool {
+        !self.segments.is_empty() || !self.vias.is_empty() || self.pour
+    }
+}
+
+/// A net's copper, in the pieces it is in.
+#[derive(Clone, Debug)]
+pub struct NetCopper {
+    /// The net.
+    pub net: NetId,
+    /// Its name, or `#<id>` for a net the board does not name.
+    pub name: String,
+    /// How many pads the net has.
+    pub pad_count: usize,
+    /// Every piece, in the order its first feature was gathered: pads in
+    /// build order, then segments, vias, pours.
+    pub pieces: Vec<CopperPiece>,
+}
+
+impl NetCopper {
+    /// The pieces that hold at least one pad. Two pads in different pieces
+    /// are an open circuit; a piece with no pad is copper going nowhere,
+    /// which is `PourIslandRule`'s report and not a missing connection.
+    pub fn pieces_with_pads(&self) -> impl Iterator<Item = &CopperPiece> {
+        self.pieces.iter().filter(|piece| !piece.pins.is_empty())
+    }
 }
 
 enum Shape {
-    Pad(Pin),
-    Segment {
-        a: [i64; 2],
-        b: [i64; 2],
-        half_width: i64,
-    },
-    /// A via, a pour: copper measured as `ClearanceRule` measures it.
-    Solid,
+    Pad(PiecePin),
+    Segment(PieceSegment),
+    Via(Via),
+    Pour,
 }
 
 struct Feature {
@@ -73,179 +137,228 @@ struct Feature {
     copper: Copper,
 }
 
+/// Every net with a pad, and the pieces its copper is in.
+///
+/// The one answer to "which pads does the copper on this board already
+/// join". `NetSplitRule` reports from it, the router routes only between its
+/// pieces, and the viewer draws a ratsnest line for each connection it says
+/// is missing. When those were three pieces of code, the viewer dropped the
+/// ratsnest of every net that had a single trace, while the checker still
+/// reported the pad that trace did not reach.
+///
+/// "Touches" is `ClearanceRule`'s measurement at zero: the same pad copper,
+/// the same segment-to-segment and segment-to-copper distances less half the
+/// trace width, the same via disc on every layer it passes. A pour counts as
+/// its whole outline.
+pub fn copper_pieces(world: &mut BoardWorld) -> Vec<NetCopper> {
+    let traces: Vec<Trace> = {
+        let ecs = world.ecs_mut();
+        in_build_order::<&Trace>(ecs).into_iter().cloned().collect()
+    };
+    let vias: Vec<Via> = {
+        let ecs = world.ecs_mut();
+        in_build_order::<&Via>(ecs).into_iter().copied().collect()
+    };
+    let pours: Vec<Zone> = world
+        .zones()
+        .into_iter()
+        .map(|(_, zone)| zone)
+        .filter(|zone| zone.kind == ZoneKind::CopperPour)
+        .collect();
+    let components: Vec<_> = {
+        let ecs = world.ecs_mut();
+        in_build_order::<(
+            Entity,
+            &RefDes,
+            &FootprintRef,
+            &NetConnections,
+            &Position,
+            &Rotation,
+        )>(ecs)
+        .into_iter()
+        .map(|(e, r, f, n, p, rot)| (e, r.clone(), f.clone(), n.clone(), *p, *rot))
+        .collect()
+    };
+    let pad_boxes = component_pads(world);
+    let names: HashMap<u32, String> = world
+        .nets()
+        .map(|(net, name)| (net.id(), name.to_string()))
+        .collect();
+    let library = world.footprints().clone();
+
+    let mut by_net: HashMap<u32, Vec<Feature>> = HashMap::new();
+
+    for (entity, refdes, footprint_ref, nets, position, rotation) in &components {
+        let Some(footprint) = library.get(footprint_ref.as_str()) else {
+            continue;
+        };
+        let Some(boxes) = pad_boxes.get(&entity.index()) else {
+            continue;
+        };
+        for (pad, pad_box) in footprint.pads.iter().zip(boxes) {
+            let Some(net) = nets.pin_net(&pad.number) else {
+                continue;
+            };
+            let at = pad_centre(pad, position, rotation);
+            // A pad on no copper layer this crate names is taken to be on
+            // every layer, as `UnroutedPinRule` takes it. On none, it
+            // would be reported as cut off for how its footprint spells a
+            // layer.
+            let layer_mask = if pad_box.layer_mask == 0 {
+                u32::MAX
+            } else {
+                pad_box.layer_mask
+            };
+            by_net.entry(net.id()).or_default().push(Feature {
+                shape: Shape::Pad(PiecePin {
+                    label: format!("{}.{}", refdes.as_str(), pad.number),
+                    entity: *entity,
+                    pin: pad.number.clone(),
+                    at,
+                    reached: pad_is_reached(&traces, &vias, &pours, net, pad, &pad_box.copper),
+                }),
+                layer_mask,
+                bounds: pad_box.copper.bounds(),
+                copper: pad_box.copper,
+            });
+        }
+    }
+
+    let mut pads_per_net: HashMap<u32, usize> = HashMap::new();
+    for (net, features) in &by_net {
+        pads_per_net.insert(*net, features.len());
+    }
+
+    for trace in &traces {
+        let layer_mask = trace.layer.to_copper_mask();
+        if layer_mask == 0 || !by_net.contains_key(&trace.net_id.id()) {
+            continue;
+        }
+        let half_width = trace.width.0 / 2;
+        let features = by_net.entry(trace.net_id.id()).or_default();
+        for segment in &trace.segments {
+            let a = [segment.start.x.0, segment.start.y.0];
+            let b = [segment.end.x.0, segment.end.y.0];
+            let bounds = AABB::from_corners(
+                [a[0].min(b[0]) - half_width, a[1].min(b[1]) - half_width],
+                [a[0].max(b[0]) + half_width, a[1].max(b[1]) + half_width],
+            );
+            features.push(Feature {
+                shape: Shape::Segment(PieceSegment {
+                    layer: trace.layer,
+                    start: segment.start,
+                    end: segment.end,
+                    half_width,
+                }),
+                layer_mask,
+                bounds,
+                copper: Copper::boxed(bounds),
+            });
+        }
+    }
+
+    for via in &vias {
+        let Some(features) = by_net.get_mut(&via.net_id.id()) else {
+            continue;
+        };
+        let copper = Copper::circle(
+            [via.position.x.0, via.position.y.0],
+            via.outer_diameter.0 / 2,
+        );
+        features.push(Feature {
+            shape: Shape::Via(*via),
+            layer_mask: via.copper_mask(),
+            bounds: copper.bounds(),
+            copper,
+        });
+    }
+
+    for pour in &pours {
+        let Some(features) = pour.net.and_then(|net| by_net.get_mut(&net.id())) else {
+            continue;
+        };
+        let bounds = AABB::from_corners(
+            [pour.bounds.min.x.0, pour.bounds.min.y.0],
+            [pour.bounds.max.x.0, pour.bounds.max.y.0],
+        );
+        features.push(Feature {
+            shape: Shape::Pour,
+            layer_mask: pour.layer_mask,
+            bounds,
+            copper: Copper::boxed(bounds),
+        });
+    }
+
+    let mut nets: Vec<u32> = by_net.keys().copied().collect();
+    nets.sort_unstable();
+
+    let mut result = Vec::with_capacity(nets.len());
+    for net in nets {
+        let mut features: Vec<Option<Feature>> = by_net
+            .remove(&net)
+            .unwrap_or_default()
+            .into_iter()
+            .map(Some)
+            .collect();
+        let groups = {
+            let present: Vec<&Feature> = features.iter().flatten().collect();
+            pieces_of(&present)
+        };
+        let pieces = groups
+            .into_iter()
+            .map(|members| {
+                let mut piece = CopperPiece::default();
+                for index in members {
+                    match features[index].take().map(|feature| feature.shape) {
+                        Some(Shape::Pad(pin)) => piece.pins.push(pin),
+                        Some(Shape::Segment(segment)) => piece.segments.push(segment),
+                        Some(Shape::Via(via)) => piece.vias.push(via),
+                        Some(Shape::Pour) => piece.pour = true,
+                        None => {}
+                    }
+                }
+                // A pad that touches another pad of its net is reached by
+                // that pad's copper, the way it is reached by a trace.
+                if piece.pins.len() > 1 {
+                    for pin in &mut piece.pins {
+                        pin.reached = true;
+                    }
+                }
+                piece
+            })
+            .collect();
+        result.push(NetCopper {
+            net: NetId::new(net),
+            name: names
+                .get(&net)
+                .cloned()
+                .unwrap_or_else(|| format!("#{net}")),
+            pad_count: pads_per_net.get(&net).copied().unwrap_or(0),
+            pieces,
+        });
+    }
+    result
+}
+
 impl DrcRule for NetSplitRule {
     fn name(&self) -> &'static str {
         "net-split"
     }
 
     fn check(&self, world: &mut BoardWorld, _rules: &DesignRules) -> Vec<DrcViolation> {
-        let traces: Vec<Trace> = {
-            let ecs = world.ecs_mut();
-            let mut query = ecs.query::<&Trace>();
-            query.iter(ecs).cloned().collect()
-        };
-        let vias: Vec<Via> = {
-            let ecs = world.ecs_mut();
-            let mut query = ecs.query::<&Via>();
-            query.iter(ecs).copied().collect()
-        };
-        let pours: Vec<Zone> = world
-            .zones()
-            .into_iter()
-            .map(|(_, zone)| zone)
-            .filter(|zone| zone.kind == ZoneKind::CopperPour)
-            .collect();
-        let components: Vec<_> = {
-            let ecs = world.ecs_mut();
-            let mut query = ecs.query::<(
-                Entity,
-                &RefDes,
-                &FootprintRef,
-                &NetConnections,
-                &Position,
-                &Rotation,
-            )>();
-            query
-                .iter(ecs)
-                .map(|(e, r, f, n, p, rot)| (e, r.clone(), f.clone(), n.clone(), *p, *rot))
-                .collect()
-        };
-        let pad_boxes = component_pads(world);
-        let names: HashMap<u32, String> = world
-            .nets()
-            .map(|(net, name)| (net.id(), name.to_string()))
-            .collect();
-        let library = world.footprints().clone();
-
-        let mut by_net: HashMap<u32, Vec<Feature>> = HashMap::new();
-
-        for (entity, refdes, footprint_ref, nets, position, rotation) in &components {
-            let Some(footprint) = library.get(footprint_ref.as_str()) else {
-                continue;
-            };
-            let Some(boxes) = pad_boxes.get(&entity.index()) else {
-                continue;
-            };
-            for (pad, pad_box) in footprint.pads.iter().zip(boxes) {
-                let Some(net) = nets.pin_net(&pad.number) else {
-                    continue;
-                };
-                let at = pad_centre(pad, position, rotation);
-                // A pad on no copper layer this crate names is taken to be on
-                // every layer, as `UnroutedPinRule` takes it. On none, it
-                // would be reported as cut off for how its footprint spells a
-                // layer.
-                let layer_mask = if pad_box.layer_mask == 0 {
-                    u32::MAX
-                } else {
-                    pad_box.layer_mask
-                };
-                by_net.entry(net.id()).or_default().push(Feature {
-                    shape: Shape::Pad(Pin {
-                        label: format!("{}.{}", refdes.as_str(), pad.number),
-                        entity: *entity,
-                        at,
-                        reached: pad_is_reached(&traces, &vias, &pours, net, pad, &pad_box.copper),
-                    }),
-                    layer_mask,
-                    bounds: pad_box.copper.bounds(),
-                    copper: pad_box.copper,
-                });
-            }
-        }
-
-        let mut pins_per_net: HashMap<u32, usize> = HashMap::new();
-        for (net, features) in &by_net {
-            pins_per_net.insert(*net, features.len());
-        }
-
-        for trace in &traces {
-            let layer_mask = trace.layer.to_copper_mask();
-            if layer_mask == 0 || !by_net.contains_key(&trace.net_id.id()) {
-                continue;
-            }
-            let half_width = trace.width.0 / 2;
-            let features = by_net.entry(trace.net_id.id()).or_default();
-            for segment in &trace.segments {
-                let a = [segment.start.x.0, segment.start.y.0];
-                let b = [segment.end.x.0, segment.end.y.0];
-                let bounds = AABB::from_corners(
-                    [a[0].min(b[0]) - half_width, a[1].min(b[1]) - half_width],
-                    [a[0].max(b[0]) + half_width, a[1].max(b[1]) + half_width],
-                );
-                features.push(Feature {
-                    shape: Shape::Segment { a, b, half_width },
-                    layer_mask,
-                    bounds,
-                    copper: Copper::boxed(bounds),
-                });
-            }
-        }
-
-        for via in &vias {
-            let Some(features) = by_net.get_mut(&via.net_id.id()) else {
-                continue;
-            };
-            let copper = Copper::circle(
-                [via.position.x.0, via.position.y.0],
-                via.outer_diameter.0 / 2,
-            );
-            features.push(Feature {
-                shape: Shape::Solid,
-                layer_mask: via.copper_mask(),
-                bounds: copper.bounds(),
-                copper,
-            });
-        }
-
-        for pour in &pours {
-            let Some(features) = pour.net.and_then(|net| by_net.get_mut(&net.id())) else {
-                continue;
-            };
-            let bounds = AABB::from_corners(
-                [pour.bounds.min.x.0, pour.bounds.min.y.0],
-                [pour.bounds.max.x.0, pour.bounds.max.y.0],
-            );
-            features.push(Feature {
-                shape: Shape::Solid,
-                layer_mask: pour.layer_mask,
-                bounds,
-                copper: Copper::boxed(bounds),
-            });
-        }
-
-        let mut nets: Vec<u32> = by_net.keys().copied().collect();
-        nets.sort_unstable();
-
         let mut violations = Vec::new();
-        for net in nets {
+        for net in copper_pieces(world) {
             // A net with one pin has nothing to be joined to.
-            if pins_per_net.get(&net).copied().unwrap_or(0) < 2 {
+            if net.pad_count < 2 {
                 continue;
             }
-            let features = &by_net[&net];
-            let pieces = pieces_of(features);
-            let name = names
-                .get(&net)
-                .cloned()
-                .unwrap_or_else(|| format!("#{net}"));
 
-            let mut reported: Vec<(Vec<&Pin>, bool)> = pieces
-                .into_iter()
-                .filter_map(|members| {
-                    let mut pins: Vec<&Pin> = Vec::new();
-                    let mut conductor = false;
-                    for index in members {
-                        match &features[index].shape {
-                            Shape::Pad(pin) => pins.push(pin),
-                            _ => conductor = true,
-                        }
-                    }
-                    if pins.is_empty() {
-                        return None;
-                    }
+            let mut reported: Vec<(Vec<&PiecePin>, bool)> = net
+                .pieces_with_pads()
+                .map(|piece| {
+                    let mut pins: Vec<&PiecePin> = piece.pins.iter().collect();
                     pins.sort_by(|a, b| a.label.cmp(&b.label));
-                    Some((pins, conductor))
+                    (pins, piece.is_conductor())
                 })
                 .filter(|(pins, conductor)| *conductor || pins.iter().any(|pin| pin.reached))
                 .collect();
@@ -266,7 +379,7 @@ impl DrcRule for NetSplitRule {
                 violations.push(DrcViolation::net_split(
                     pins[0].entity,
                     main,
-                    &name,
+                    &net.name,
                     &cut_off,
                     &rest,
                     pins[0].at,
@@ -279,7 +392,7 @@ impl DrcRule for NetSplitRule {
 }
 
 /// The features that touch one another, gathered into pieces.
-fn pieces_of(features: &[Feature]) -> Vec<Vec<usize>> {
+fn pieces_of(features: &[&Feature]) -> Vec<Vec<usize>> {
     let mut parent: Vec<usize> = (0..features.len()).collect();
     fn root(parent: &mut [usize], mut at: usize) -> usize {
         while parent[at] != at {
@@ -291,7 +404,7 @@ fn pieces_of(features: &[Feature]) -> Vec<Vec<usize>> {
 
     for i in 0..features.len() {
         for j in (i + 1)..features.len() {
-            if touches(&features[i], &features[j]) {
+            if touches(features[i], features[j]) {
                 let (a, b) = (root(&mut parent, i), root(&mut parent, j));
                 if a != b {
                     parent[a.max(b)] = a.min(b);
@@ -316,24 +429,30 @@ fn touches(one: &Feature, other: &Feature) -> bool {
     if one.layer_mask & other.layer_mask == 0 || aabb_distance(&one.bounds, &other.bounds) > 0 {
         return false;
     }
-    match (&one.shape, &other.shape) {
+    let ends = |segment: &PieceSegment| {
         (
-            Shape::Segment {
-                a: a1,
-                b: a2,
-                half_width: wa,
-            },
-            Shape::Segment {
-                a: b1,
-                b: b2,
-                half_width: wb,
-            },
-        ) => segment_distance(*a1, *a2, *b1, *b2) <= wa + wb,
-        (Shape::Segment { a, b, half_width }, _) => {
-            segment_touches(*a, *b, *half_width, &other.copper)
+            [segment.start.x.0, segment.start.y.0],
+            [segment.end.x.0, segment.end.y.0],
+        )
+    };
+    match (&one.shape, &other.shape) {
+        // Two pads of one net whose copper touches are one land, as KiCad's
+        // connectivity joins them (`CN_VISITOR`, `connectivity_algo.cpp`,
+        // read 2026-09-27). Touching is a gap of zero, the gap at which
+        // `ClearanceRule` reports two nets shorted and the paste rule takes
+        // two openings of one net for one hole.
+        (Shape::Pad(_), Shape::Pad(_)) => copper_distance(&one.copper, &other.copper) == 0,
+        (Shape::Segment(first), Shape::Segment(second)) => {
+            let ((a1, a2), (b1, b2)) = (ends(first), ends(second));
+            segment_distance(a1, a2, b1, b2) <= first.half_width + second.half_width
         }
-        (_, Shape::Segment { a, b, half_width }) => {
-            segment_touches(*a, *b, *half_width, &one.copper)
+        (Shape::Segment(segment), _) => {
+            let (a, b) = ends(segment);
+            segment_touches(a, b, segment.half_width, &other.copper)
+        }
+        (_, Shape::Segment(segment)) => {
+            let (a, b) = ends(segment);
+            segment_touches(a, b, segment.half_width, &one.copper)
         }
         _ => copper_distance(&one.copper, &other.copper) == 0,
     }

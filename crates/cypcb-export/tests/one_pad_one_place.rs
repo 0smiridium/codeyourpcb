@@ -54,6 +54,7 @@ fn board() -> (BoardWorld, FootprintLibrary) {
             slot: None,
             layers: vec![Layer::TopCopper, Layer::BottomCopper],
             mask_margin: None,
+            rotation: Rotation::ZERO,
         }],
         ..base
     });
@@ -84,10 +85,17 @@ fn the_flash_and_the_hole_are_at_the_same_point() {
         &library,
         Layer::TopCopper,
         &CoordinateFormat::FORMAT_MM_2_6,
+        cypcb_export::stamp::Stamp::UNIX_EPOCH,
     )
     .expect("the copper exports");
-    let drill = export_excellon(&mut world, &library, &CoordinateFormat::FORMAT_MM_2_6, None)
-        .expect("the drill file exports");
+    let drill = export_excellon(
+        &mut world,
+        &library,
+        &CoordinateFormat::FORMAT_MM_2_6,
+        None,
+        cypcb_export::stamp::Stamp::UNIX_EPOCH,
+    )
+    .expect("the drill file exports");
 
     assert!(
         copper.contains(&format!("X{EXPECTED_NM}Y{EXPECTED_NM}")),
@@ -121,6 +129,7 @@ fn neither_file_truncates_toward_the_origin() {
         &library,
         Layer::TopCopper,
         &CoordinateFormat::FORMAT_MM_2_6,
+        cypcb_export::stamp::Stamp::UNIX_EPOCH,
     )
     .expect("the copper exports");
 
